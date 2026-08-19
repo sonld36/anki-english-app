@@ -1,65 +1,202 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import DeckSelector from "@/components/DeckSelector";
+import HistoryPanel from "@/components/HistoryPanel";
+import { historyStorage } from "@/lib/history";
+
+export default function HomePage() {
+  const router = useRouter();
+  const [selectedDeck, setSelectedDeck] = useState<string | null>(null);
+  const [recentCount, setRecentCount] = useState(0);
+
+  useEffect(() => {
+    setRecentCount(historyStorage.getAll().length);
+  }, []);
+
+  function handleSelectDeck(deck: string) {
+    setSelectedDeck(deck);
+  }
+
+  function handleGoToDeck() {
+    if (selectedDeck) {
+      router.push(`/deck/${encodeURIComponent(selectedDeck)}`);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main style={{ minHeight: "100vh", padding: "0 0 60px" }}>
+      {/* Navigation */}
+      <nav
+        style={{
+          padding: "16px 32px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          borderBottom: "1px solid var(--border-subtle)",
+          background: "rgba(10, 10, 20, 0.8)",
+          backdropFilter: "blur(12px)",
+          position: "sticky",
+          top: 0,
+          zIndex: 20,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ fontSize: "1.5rem" }}>🎴</span>
+          <span
+            style={{ fontWeight: 800, fontSize: "1.1rem" }}
+            className="heading-gradient"
+          >
+            AnkiChat
+          </span>
+        </div>
+        <HistoryPanel />
+      </nav>
+
+      {/* Hero */}
+      <section
+        style={{
+          maxWidth: "700px",
+          margin: "0 auto",
+          padding: "80px 24px 60px",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "6px 16px",
+            background: "rgba(124, 58, 237, 0.15)",
+            border: "1px solid rgba(124, 58, 237, 0.3)",
+            borderRadius: "20px",
+            fontSize: "0.8rem",
+            color: "#a78bfa",
+            fontWeight: 600,
+            marginBottom: "28px",
+          }}
+        >
+          ✨ Học từ vựng qua hội thoại AI • Luyện nói real-time
+        </div>
+
+        <h1
+          style={{
+            fontSize: "clamp(2rem, 5vw, 3rem)",
+            fontWeight: 800,
+            lineHeight: 1.15,
+            marginBottom: "20px",
+            letterSpacing: "-0.02em",
+          }}
+          className="heading-gradient"
+        >
+          Biến Anki Flashcard
+          <br />
+          thành Hội Thoại Thực Tế
+        </h1>
+
+        <p
+          style={{
+            fontSize: "1.05rem",
+            color: "var(--text-secondary)",
+            lineHeight: 1.7,
+            marginBottom: "48px",
+            maxWidth: "500px",
+            margin: "0 auto 48px",
+          }}
+        >
+          Lấy bộ từ vựng từ Anki, sinh ra hội thoại tiếng Anh tự nhiên,
+          rồi luyện nói trực tiếp với AI bằng Gemini Live.
+        </p>
+
+        {/* Features */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "16px",
+            marginBottom: "48px",
+          }}
+        >
+          {[
+            { icon: "📚", title: "Lấy từ Anki", desc: "Kết nối trực tiếp với AnkiConnect" },
+            { icon: "✨", title: "Sinh hội thoại", desc: "Gemini AI tạo kịch bản tự nhiên" },
+            { icon: "🎙️", title: "Luyện nói", desc: "Real-time voice với Gemini Live" },
+          ].map((f) => (
+            <div
+              key={f.title}
+              className="card"
+              style={{ padding: "20px 16px", textAlign: "center" }}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+              <div style={{ fontSize: "1.8rem", marginBottom: "10px" }}>{f.icon}</div>
+              <div style={{ fontWeight: 700, fontSize: "0.875rem", marginBottom: "4px" }}>
+                {f.title}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{f.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Deck selector card */}
+        <div
+          className="card-elevated"
+          style={{ padding: "28px", textAlign: "left" }}
+        >
+          <DeckSelector
+            onSelectDeck={handleSelectDeck}
+            selectedDeck={selectedDeck}
+          />
+
+          {selectedDeck && (
+            <div className="fade-in" style={{ marginTop: "20px" }}>
+              <div
+                style={{
+                  padding: "14px 16px",
+                  background: "rgba(124, 58, 237, 0.1)",
+                  border: "1px solid rgba(124, 58, 237, 0.25)",
+                  borderRadius: "10px",
+                  marginBottom: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                }}
+              >
+                <span>📂</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>{selectedDeck}</div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    Đã chọn
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={handleGoToDeck}
+                className="btn-primary"
+                style={{ width: "100%" }}
+                id="go-to-deck-btn"
+              >
+                Xem Cards & Sinh Hội Thoại →
+              </button>
+            </div>
+          )}
+        </div>
+
+        {recentCount > 0 && (
+          <p
+            style={{
+              marginTop: "20px",
+              fontSize: "0.8rem",
+              color: "var(--text-muted)",
+            }}
+          >
+            💾 Bạn có {recentCount} hội thoại đã lưu —{" "}
+            <span style={{ color: "var(--accent-primary)", cursor: "pointer" }}>
+              Xem lịch sử
+            </span>
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        )}
+      </section>
+    </main>
   );
 }
