@@ -16,6 +16,9 @@ interface AzureConfig {
   ReferenceText: string;
   GradingSystem: "HundredMark";
   Granularity: "Phoneme";
+  // Without this the service silently falls back to "Basic", which returns only
+  // AccuracyScore — no ErrorType, no Fluency/Completeness/Prosody. Verified 2026-08-20.
+  Dimension: "Comprehensive";
   EnableMiscue: boolean;
   EnableProsodyAssessment: boolean;
   PhonemeAlphabet: "IPA";
@@ -40,6 +43,7 @@ async function assessWithAzure(wav: ArrayBuffer, referenceText: string) {
     ReferenceText: referenceText,
     GradingSystem: "HundredMark",
     Granularity: "Phoneme",
+    Dimension: "Comprehensive",
     // Miscue detection is what surfaces Omission/Insertion — the dropped final
     // consonants and swallowed endings that matter most for Vietnamese speakers.
     EnableMiscue: true,

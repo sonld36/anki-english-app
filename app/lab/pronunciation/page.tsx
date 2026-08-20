@@ -48,13 +48,23 @@ const TEST_SENTENCES = [
   },
 ];
 
+// The REST API for short audio returns assessment scores FLAT on NBest[0] and on
+// each word/phoneme — not nested under a PronunciationAssessment object the way the
+// Speech SDK does. Verified against a live response 2026-08-20.
 interface AzureWord {
   Word: string;
-  PronunciationAssessment?: { AccuracyScore: number; ErrorType: string };
-  Phonemes?: {
-    Phoneme: string;
-    PronunciationAssessment?: { AccuracyScore: number };
-  }[];
+  AccuracyScore?: number;
+  ErrorType?: string;
+  Phonemes?: { Phoneme: string; AccuracyScore?: number }[];
+}
+
+interface AzureNBest {
+  PronScore?: number;
+  AccuracyScore?: number;
+  FluencyScore?: number;
+  CompletenessScore?: number;
+  ProsodyScore?: number;
+  Words?: AzureWord[];
 }
 
 interface RunResult {
@@ -362,8 +372,7 @@ export default function PronunciationLabPage() {
             </thead>
             <tbody>
               {azureRuns.map((r) => {
-                const nb = (r.raw as { NBest?: { PronunciationAssessment?: Record<string, number> }[] })
-                  ?.NBest?.[0]?.PronunciationAssessment;
+                const nb = (r.raw as { NBest?: AzureNBest[] })?.NBest?.[0];
                 return (
                   <tr key={r.id} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
                     <td style={{ padding: "6px 4px" }}>#{r.id}</td>
@@ -437,15 +446,8 @@ function ResultCard({ run }: { run: RunResult }) {
     );
   }
 
-  const nbest = (run.raw as {
-    NBest?: {
-      PronunciationAssessment?: Record<string, number>;
-      Words?: AzureWord[];
-    }[];
-    DisplayText?: string;
-    RecognitionStatus?: string;
-  }).NBest?.[0];
-  const scores = nbest?.PronunciationAssessment;
+  const nbest = (run.raw as { NBest?: AzureNBest[] }).NBest?.[0];
+  const scores = nbest;
   const words = nbest?.Words ?? [];
 
   return (
@@ -474,9 +476,8 @@ function ResultCard({ run }: { run: RunResult }) {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
         {words.map((w, i) => {
-          const pa = w.PronunciationAssessment;
-          const acc = pa?.AccuracyScore ?? 0;
-          const err = pa?.ErrorType ?? "None";
+          const acc = w.AccuracyScore ?? 0;
+          const err = w.ErrorType ?? "None";
           const bad = err !== "None";
           return (
             <details
@@ -503,11 +504,11 @@ function ResultCard({ run }: { run: RunResult }) {
                     key={j}
                     style={{
                       marginRight: "8px",
-                      color: scoreColor(p.PronunciationAssessment?.AccuracyScore ?? 0),
+                      color: scoreColor(p.AccuracyScore ?? 0),
                     }}
                   >
                     {p.Phoneme}
-                    <sub>{Math.round(p.PronunciationAssessment?.AccuracyScore ?? 0)}</sub>
+                    <sub>{Math.round(p.AccuracyScore ?? 0)}</sub>
                   </span>
                 )) ?? "—"}
               </div>
