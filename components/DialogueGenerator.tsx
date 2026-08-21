@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { CONTEXTS, type ContextId, type DialogueLevel } from "@/lib/gemini";
 import type { VocabularyItem } from "@/lib/vocabulary/types";
+import type { DialogueScript } from "@/lib/dialogue/types";
+import { isDialogueScript } from "@/lib/dialogue/validate";
 
 interface DialogueGeneratorProps {
   cards: VocabularyItem[];
   onDialogueGenerated: (
-    dialogue: string,
+    script: DialogueScript,
     context: ContextId,
     level: DialogueLevel
   ) => void;
@@ -44,7 +46,13 @@ export default function DialogueGenerator({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error ?? "Generation failed");
 
-      onDialogueGenerated(data.dialogue, context, level);
+      // A 200 body is still untrusted: a malformed script would throw inside
+      // the parent's render, past this error state.
+      if (!isDialogueScript(data?.script)) {
+        throw new Error("Kịch bản trả về không hợp lệ. Bạn hãy thử lại.");
+      }
+
+      onDialogueGenerated(data.script, context, level);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lỗi không xác định");
     } finally {

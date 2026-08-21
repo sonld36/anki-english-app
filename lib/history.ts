@@ -1,5 +1,7 @@
 import type { VocabularyItem } from "./vocabulary/types";
 import type { ContextId, DialogueLevel } from "./gemini";
+import type { DialogueScript } from "./dialogue/types";
+import { isDialogueScript } from "./dialogue/validate";
 
 export interface HistoryEntry {
   id: string;
@@ -7,7 +9,14 @@ export interface HistoryEntry {
   cards: VocabularyItem[];
   context: ContextId;
   level: DialogueLevel;
-  dialogue: string;
+  /** The structured script (schema version 2), or `null` for a legacy entry. */
+  script: DialogueScript | null;
+  /**
+   * The markdown blob entries carried before Story 1.2. Present only when
+   * `script` is `null`, so consumers branch on `script` and fall back here.
+   * Never written by `save` — it exists to keep old entries renderable.
+   */
+  legacyDialogue?: string;
   practiceTranscript?: PracticeMessage[];
   createdAt: string;
 }
@@ -31,8 +40,15 @@ type StoredVocabularyItem = Omit<VocabularyItem, "id"> & {
   modelName?: string;
 };
 
-type StoredHistoryEntry = Omit<HistoryEntry, "cards"> & {
+type StoredHistoryEntry = Omit<
+  HistoryEntry,
+  "cards" | "script" | "legacyDialogue"
+> & {
   cards: StoredVocabularyItem[];
+  /** Schema version 2, written since Story 1.2. */
+  script?: DialogueScript;
+  /** Schema version 1: one markdown string. Read-only, never written again. */
+  dialogue?: string;
 };
 
 function normalizeItem(item: StoredVocabularyItem): VocabularyItem {
@@ -45,8 +61,39 @@ function normalizeItem(item: StoredVocabularyItem): VocabularyItem {
   };
 }
 
+/**
+ * Is this stored element something we can safely present as a `HistoryEntry`?
+ *
+ * Without this, a `null` or garbage array element normalizes into an object
+ * with no `id` that TypeScript believes is complete — it reaches
+ * `HistoryPanel`'s `key={entry.id}` and navigates to `/practice?id=undefined`.
+ * Skipped on read only: `readRaw` stays raw, so nothing unrecognised is
+ * rewritten or dropped from disk.
+ */
+function isStoredEntry(value: unknown): value is StoredHistoryEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const entry = value as { id?: unknown; createdAt?: unknown };
+  return (
+    typeof entry.id === "string" &&
+    entry.id.length > 0 &&
+    typeof entry.createdAt === "string"
+  );
+}
+
 function normalizeEntry(entry: StoredHistoryEntry): HistoryEntry {
-  return { ...entry, cards: (entry?.cards ?? []).map(normalizeItem) };
+  const { cards, script, dialogue, ...rest } = entry;
+  const normalizedScript = isDialogueScript(script) ? script : null;
+  return {
+    ...rest,
+    cards: (cards ?? []).map(normalizeItem),
+    script: normalizedScript,
+    // A legacy entry keeps its markdown so the old renderer can still show it.
+    ...(normalizedScript
+      ? {}
+      : { legacyDialogue: typeof dialogue === "string" ? dialogue : "" }),
+  };
 }
 
 /**
@@ -54,7 +101,7 @@ function normalizeEntry(entry: StoredHistoryEntry): HistoryEntry {
  * rewriting the list (delete, transcript update) leaves untouched entries
  * exactly as they were on disk.
  */
-function readRaw(): StoredHistoryEntry[] {
+function readRaw(): unknown[] {
   if (typeof window === "undefined") return [];
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
@@ -66,10 +113,18 @@ function readRaw(): StoredHistoryEntry[] {
 
 export const historyStorage = {
   getAll(): HistoryEntry[] {
-    return readRaw().map(normalizeEntry);
+    return readRaw().filter(isStoredEntry).map(normalizeEntry);
   },
 
-  save(entry: Omit<HistoryEntry, "id" | "createdAt">): HistoryEntry {
+  /**
+   * Only schema-version-2 entries are ever written. The legacy markdown shape
+   * is read-only by design, so it is not expressible here.
+   */
+  save(
+    entry: Omit<HistoryEntry, "id" | "createdAt" | "legacyDialogue"> & {
+      script: DialogueScript;
+    }
+  ): HistoryEntry {
     const newEntry: HistoryEntry = {
       ...entry,
       id: crypto.randomUUID(),
@@ -86,13 +141,15 @@ export const historyStorage = {
   updateTranscript(id: string, transcript: PracticeMessage[]) {
     const all = readRaw();
     const updated = all.map((e) =>
-      e.id === id ? { ...e, practiceTranscript: transcript } : e
+      isStoredEntry(e) && e.id === id
+        ? { ...e, practiceTranscript: transcript }
+        : e
     );
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   },
 
   delete(id: string) {
-    const all = readRaw().filter((e) => e.id !== id);
+    const all = readRaw().filter((e) => !(isStoredEntry(e) && e.id === id));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
   },
 

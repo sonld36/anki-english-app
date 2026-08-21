@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { getVocabularySource } from "@/lib/vocabulary/source";
 import { type VocabularyItem } from "@/lib/vocabulary/types";
 import { type ContextId, type DialogueLevel } from "@/lib/gemini";
+import { type DialogueScript } from "@/lib/dialogue/types";
 import FlashcardList from "@/components/FlashcardList";
 import DialogueGenerator from "@/components/DialogueGenerator";
 import DialogueDisplay from "@/components/DialogueDisplay";
@@ -19,7 +20,7 @@ export default function DeckPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [dialogue, setDialogue] = useState<string | null>(null);
+  const [script, setScript] = useState<DialogueScript | null>(null);
   const [dialogueContext, setDialogueContext] = useState<ContextId>("cafe");
   const [dialogueLevel, setDialogueLevel] = useState<DialogueLevel>("B1");
   const [usedCards, setUsedCards] = useState<VocabularyItem[]>([]);
@@ -42,17 +43,21 @@ export default function DeckPage() {
   }
 
   function handleDialogueGenerated(
-    dlg: string,
+    generated: DialogueScript,
     ctx: ContextId,
     lvl: DialogueLevel
   ) {
-    setDialogue(dlg);
+    setScript(generated);
     setDialogueContext(ctx);
     setDialogueLevel(lvl);
-    // Track which words are in the dialogue
-    const words = cards.map((c) => c.word.toLowerCase());
-    const usedWords = words.filter((w) => dlg.toLowerCase().includes(w));
-    setUsedCards(cards.filter((c) => usedWords.includes(c.word.toLowerCase())));
+    // Which words the script actually uses comes from the turns' own data —
+    // never from a substring scan, which would match `cold` inside `colder`.
+    const used = new Set(
+      generated.turns.flatMap((turn) =>
+        turn.targetWords.map((w) => w.trim().toLowerCase())
+      )
+    );
+    setUsedCards(cards.filter((c) => used.has(c.word.trim().toLowerCase())));
     // Scroll to dialogue
     setTimeout(() => {
       document.getElementById("dialogue-section")?.scrollIntoView({
@@ -182,15 +187,15 @@ export default function DeckPage() {
           </section>
 
           {/* Dialogue section */}
-          {dialogue && (
+          {script && (
             <section id="dialogue-section" className="fade-in">
               <DialogueDisplay
-                dialogue={dialogue}
+                script={script}
                 cards={usedCards.length > 0 ? usedCards : cards.slice(0, 10)}
                 deckName={deckName}
                 context={dialogueContext}
                 level={dialogueLevel}
-                onRegenerate={() => setDialogue(null)}
+                onRegenerate={() => setScript(null)}
               />
             </section>
           )}

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { historyStorage, type HistoryEntry, type PracticeMessage } from "@/lib/history";
 import { useGeminiLive } from "@/hooks/useGeminiLive";
-import { highlightWords } from "@/lib/gemini";
+import { scriptToMarkdown, scriptTargetWords } from "@/lib/dialogue/types";
+import { escapeHtml, renderHighlightedHtml } from "@/lib/dialogue/words";
 
 interface VoicePracticeProps {
   entry: HistoryEntry;
@@ -13,6 +14,13 @@ interface VoicePracticeProps {
 export default function VoicePractice({ entry, onBack }: VoicePracticeProps) {
   const [showScript, setShowScript] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // One markdown blob either way: a v2 script is flattened, a legacy entry is
+  // already stored as one. This screen is the dead Gemini Live path, torn down
+  // in Story 2.8 — it only has to keep working.
+  const scriptText = entry.script
+    ? scriptToMarkdown(entry.script)
+    : entry.legacyDialogue ?? "";
 
   const systemPrompt = `You are Sam, an English conversation partner in a ${entry.context} setting. 
 
@@ -25,7 +33,7 @@ You are having a natural conversation with a Vietnamese English learner (Alex). 
 - Start by greeting the user warmly and opening the conversation
 
 Reference dialogue for context (but improvise freely):
-${entry.dialogue}`;
+${scriptText}`;
 
   const { status, transcript, connect, disconnect, startListening, stopListening, error } =
     useGeminiLive({
@@ -39,7 +47,11 @@ ${entry.dialogue}`;
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript]);
 
-  const words = entry.cards.map((c) => c.word);
+  // Target words come from the script's own data when there is one; the card
+  // list is the fallback only for legacy entries, which carry no turn data.
+  const words = entry.script
+    ? scriptTargetWords(entry.script)
+    : entry.cards.map((c) => c.word);
   const isConnected = status === "ready" || status === "listening" || status === "speaking";
   const isListening = status === "listening";
   const isSpeaking = status === "speaking";
@@ -222,8 +234,8 @@ ${entry.dialogue}`;
                 className={`chat-bubble ${msg.role === "ai" ? "chat-bubble-ai" : "chat-bubble-user"}`}
                 dangerouslySetInnerHTML={{
                   __html: msg.role === "ai"
-                    ? highlightWords(msg.text, words)
-                    : msg.text,
+                    ? renderHighlightedHtml(msg.text, words)
+                    : escapeHtml(msg.text),
                 }}
               />
             </div>
@@ -340,7 +352,9 @@ ${entry.dialogue}`;
               flex: 1,
             }}
             dangerouslySetInnerHTML={{
-              __html: highlightWords(entry.dialogue, words)
+              // Escaped and highlighted first; the two markdown replacements
+              // then add their own markup on top of already-safe text.
+              __html: renderHighlightedHtml(scriptText, words)
                 .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
                 .replace(/^(#{1,3})\s(.+)$/gm, "<strong style='color:var(--accent-amber)'>$2</strong>"),
             }}

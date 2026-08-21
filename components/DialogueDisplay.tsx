@@ -1,14 +1,23 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { highlightWords } from "@/lib/gemini";
 import { historyStorage } from "@/lib/history";
 import type { VocabularyItem } from "@/lib/vocabulary/types";
 import type { ContextId, DialogueLevel } from "@/lib/gemini";
+import {
+  SPEAKER_LABELS,
+  scriptToMarkdown,
+  type DialogueScript,
+} from "@/lib/dialogue/types";
+import { renderHighlightedHtml } from "@/lib/dialogue/words";
 
 interface DialogueDisplayProps {
-  dialogue: string;
+  /** The structured script. `null` only for a legacy markdown entry. */
+  script: DialogueScript | null;
+  /** Markdown from a pre-Story-1.2 history entry; used when `script` is null. */
+  legacyDialogue?: string;
   cards: VocabularyItem[];
   deckName: string;
   context: ContextId;
@@ -17,7 +26,8 @@ interface DialogueDisplayProps {
 }
 
 export default function DialogueDisplay({
-  dialogue,
+  script,
+  legacyDialogue,
   cards,
   deckName,
   context,
@@ -30,9 +40,11 @@ export default function DialogueDisplay({
   const [isCopied, setIsCopied] = useState(false);
 
   const words = cards.map((c) => c.word);
-  const highlightedHtml = highlightWords(dialogue, words);
+  const dialogue = legacyDialogue ?? "";
+  const plainText = script ? scriptToMarkdown(script) : dialogue;
 
-  // Parse dialogue into lines
+  // ---- Legacy branch: entries stored as one markdown string, pre-Story 1.2.
+  // Kept intact so old history entries never blank the screen.
   const parseDialogue = (text: string) => {
     const lines = text.split("\n").filter((l) => l.trim());
     return lines.map((line, i) => {
@@ -59,7 +71,9 @@ export default function DialogueDisplay({
       router.push(`/practice?id=${savedId}`);
       return;
     }
-    const entry = historyStorage.save({ deckName, cards, context, level, dialogue });
+    // A legacy entry is already in storage; only fresh scripts are ever saved.
+    if (!script) return;
+    const entry = historyStorage.save({ deckName, cards, context, level, script });
     setSaved(true);
     setSavedId(entry.id);
   }
@@ -67,7 +81,8 @@ export default function DialogueDisplay({
   function handlePractice() {
     let id = savedId;
     if (!id) {
-      const entry = historyStorage.save({ deckName, cards, context, level, dialogue });
+      if (!script) return;
+      const entry = historyStorage.save({ deckName, cards, context, level, script });
       id = entry.id;
       setSaved(true);
       setSavedId(entry.id);
@@ -76,7 +91,7 @@ export default function DialogueDisplay({
   }
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(dialogue);
+    await navigator.clipboard.writeText(plainText);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   }
@@ -119,7 +134,38 @@ export default function DialogueDisplay({
         className="card-elevated"
         style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "6px" }}
       >
-        {parsedLines.map(({ line, isA, isB, isSection, key }) => {
+        {script?.turns.map((turn) => {
+          const isSystem = turn.speaker === "system";
+          return (
+            <div
+              key={turn.index}
+              className={`dialogue-line ${isSystem ? "dialogue-line-a" : "dialogue-line-b"}`}
+            >
+              <span
+                style={{
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  color: isSystem ? "var(--accent-primary)" : "var(--accent-secondary)",
+                  letterSpacing: "0.05em",
+                  marginRight: "8px",
+                  textTransform: "uppercase",
+                }}
+              >
+                {SPEAKER_LABELS[turn.speaker]}
+              </span>
+              <span
+                style={{ color: "var(--text-primary)", lineHeight: 1.7 }}
+                // Target words come from the turn's own data, not a substring
+                // scan of the whole card list.
+                dangerouslySetInnerHTML={{
+                  __html: renderHighlightedHtml(turn.text, turn.targetWords),
+                }}
+              />
+            </div>
+          );
+        })}
+
+        {!script && parsedLines.map(({ line, isA, isB, isSection, key }) => {
           if (isSection) {
             return (
               <div

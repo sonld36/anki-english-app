@@ -1,4 +1,5 @@
 import type { VocabularyItem } from "./vocabulary/types";
+import type { DialogueScript } from "./dialogue/types";
 
 export type DialogueLevel = "A2" | "B1" | "B2";
 
@@ -18,7 +19,7 @@ export async function generateDialogue(
   context: ContextId,
   level: DialogueLevel = "B1",
   customContext?: string
-): Promise<string> {
+): Promise<DialogueScript> {
   const contextLabel = CONTEXTS.find((c) => c.id === context)?.description ?? context;
   const finalContext = customContext || contextLabel;
 
@@ -34,7 +35,7 @@ export async function generateDialogue(
   }
 
   const data = await res.json();
-  return data.dialogue as string;
+  return data.script as DialogueScript;
 }
 
 // Highlight target words in a text by wrapping them in <mark> tags
