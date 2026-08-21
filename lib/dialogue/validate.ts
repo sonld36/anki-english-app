@@ -7,20 +7,32 @@
 
 import {
   DIALOGUE_SCRIPT_VERSION,
+  MAX_EXTRA_HINT_KEYWORDS,
   MAX_TARGET_WORDS_PER_SCRIPT,
   MAX_TARGET_WORDS_PER_TURN,
   MAX_TURNS,
+  MIN_LEAKED_CONTENT_WORDS,
   MIN_TURNS,
   SPEAKERS,
+  SUPPORTED_SCRIPT_VERSIONS,
+  type DialogueHints,
   type DialogueScript,
   type DialogueTurn,
   type Speaker,
 } from "./types";
+import { containsSequence, contentWords, tokenize } from "./stopwords";
 import { containsWord, wordPattern } from "./words";
 
+/**
+ * Two separate lists, on purpose. A broken script rule means the user cannot
+ * have this script at all; a broken hint rule means one rung of a ladder that
+ * has no consumer until Story 2.4 came out wrong. The route has to be able to
+ * tell them apart, so it can hand over a script whose only remaining faults
+ * are hints instead of charging the user a whole generation for them.
+ */
 export type ValidationResult =
   | { ok: true }
-  | { ok: false; violations: string[] };
+  | { ok: false; violations: string[]; hintViolations: string[] };
 
 /**
  * Consonants that must not begin the word immediately following `word`.
@@ -59,6 +71,16 @@ function findConsonantClash(text: string, word: string): string | null {
   return null;
 }
 
+function isDialogueHints(value: unknown): value is DialogueHints {
+  if (typeof value !== "object" || value === null) return false;
+  const hints = value as Partial<DialogueHints>;
+  return (
+    typeof hints.situation === "string" &&
+    Array.isArray(hints.keywords) &&
+    hints.keywords.every((word) => typeof word === "string")
+  );
+}
+
 function isDialogueTurn(value: unknown): value is DialogueTurn {
   if (typeof value !== "object" || value === null) return false;
   const turn = value as Partial<DialogueTurn>;
@@ -68,22 +90,227 @@ function isDialogueTurn(value: unknown): value is DialogueTurn {
     SPEAKERS.includes(turn.speaker as Speaker) &&
     typeof turn.text === "string" &&
     Array.isArray(turn.targetWords) &&
-    turn.targetWords.every((word) => typeof word === "string")
+    turn.targetWords.every((word) => typeof word === "string") &&
+    // Absent is fine — a version 2 script has no hints anywhere. Present but
+    // malformed is not: the route shapes hints before the validator sees them,
+    // so garbage here means the object did not come from the route.
+    (turn.hints === undefined || isDialogueHints(turn.hints))
   );
+}
+
+/**
+ * Vietnamese-specific letters. Level 1 is supposed to be written in
+ * Vietnamese, and an all-English situation passes every other hint rule while
+ * being exactly the "translation, not situation" failure the story is guarding
+ * against.
+ *
+ * This is a heuristic and it is allowed to be: a genuinely unaccented
+ * Vietnamese sentence costs one repair call, not a generation, because hint
+ * faults are non-fatal. Do **not** promote it to a script rule — at 422 stakes
+ * a false positive would cost the user their script.
+ */
+const VIETNAMESE_LETTERS =
+  /[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]/i;
+
+/**
+ * The hint rules for one turn. Reported separately from script rules — see
+ * `ValidationResult`. `n` is the 1-based turn number used in the message,
+ * because the model counts turns, not array indexes.
+ */
+function hintViolationsForTurn(turn: DialogueTurn, n: number): string[] {
+  const out: string[] = [];
+
+  // Rule 1 — only learner turns carry hints.
+  if (turn.speaker !== "learner") {
+    if (turn.hints !== undefined) {
+      out.push(
+        `Turn ${n} is a "system" turn but carries \`hints\`. Only "learner" ` +
+          `turns may have hints — the learner never has to produce a system line.`
+      );
+    }
+    return out;
+  }
+  const hints = turn.hints;
+  if (hints === undefined) {
+    out.push(
+      `Turn ${n} is a "learner" turn with no \`hints\`. Every learner turn ` +
+        `needs both levels: \`situation\` (Vietnamese, the situation the line ` +
+        `is used in) and \`keywords\`.`
+    );
+    return out;
+  }
+
+  const keywords = hints.keywords.map((word) => word.trim()).filter(Boolean);
+  const targets = turn.targetWords.map((word) => word.trim()).filter(Boolean);
+  // A target word counts as content however the stopword list feels about it —
+  // decks teach `like`, `right` and `well` as vocabulary.
+  const targetTokens = new Set(targets.flatMap(tokenize));
+  const lineContent = contentWords(turn.text, targetTokens);
+
+  // Rule 2 — level 1 must describe the situation, not show or translate the line.
+  const situation = hints.situation.trim();
+  if (!situation) {
+    out.push(
+      `Turn ${n} has an empty \`hints.situation\`. Level 1 must say, in ` +
+        `Vietnamese, in what situation this line is used.`
+    );
+  } else {
+    if (!VIETNAMESE_LETTERS.test(situation)) {
+      out.push(
+        `Turn ${n}'s \`hints.situation\` does not look like Vietnamese: ` +
+          `"${situation}". Level 1 is written in Vietnamese — describe the ` +
+          `situation the line is used in, do not translate the line.`
+      );
+    }
+
+    if (containsSequence(tokenize(situation), tokenize(turn.text))) {
+      out.push(
+        `Turn ${n}'s \`hints.situation\` contains the whole line "${turn.text}". ` +
+          `Level 1 must describe the situation in Vietnamese and must never ` +
+          `show the line or translate it.`
+      );
+    } else {
+      const situationContent = contentWords(situation, targetTokens);
+      // Clamped, so a short line cannot slip past the rule by having fewer
+      // content words than the threshold: quoting all of a 2-word line reveals
+      // just as much as quoting 4 words of a longer one.
+      const size = Math.min(MIN_LEAKED_CONTENT_WORDS, lineContent.length);
+      for (let i = 0; i + size <= lineContent.length; i++) {
+        const window = lineContent.slice(i, i + size);
+        if (containsSequence(situationContent, window)) {
+          out.push(
+            `Turn ${n}'s \`hints.situation\` reuses ${size} content ` +
+              `word${size > 1 ? "s" : ""} of the line in a row ` +
+              `("${window.join(" ")}"). Level 1 must describe when the line is ` +
+              `used, in Vietnamese, without quoting or translating it.`
+          );
+          break;
+        }
+      }
+    }
+  }
+
+  // Rule 3 — level 2 holds the target words plus at most two other content
+  // words, and every keyword comes from the line itself.
+  if (keywords.length === 0) {
+    out.push(
+      `Turn ${n} has an empty \`hints.keywords\`. Level 2 must list this ` +
+        `turn's target words plus at most ${MAX_EXTRA_HINT_KEYWORDS} other ` +
+        `content words.`
+    );
+  } else {
+    const missing = targets.filter(
+      (word) => !keywords.some((keyword) => containsWord(keyword, word))
+    );
+    if (missing.length > 0) {
+      out.push(
+        `Turn ${n}'s \`hints.keywords\` omits the target ` +
+          `word${missing.length > 1 ? "s" : ""} ` +
+          `${missing.map((word) => `"${word}"`).join(", ")}. Level 2 must list ` +
+          `every target word of its own turn.`
+      );
+    }
+
+    // A keyword that is not in the line is not a hint about the line — it
+    // sends the learner after a word they were never meant to say.
+    const invented = keywords.filter(
+      (keyword) => !containsWord(turn.text, keyword)
+    );
+    if (invented.length > 0) {
+      out.push(
+        `Turn ${n}'s \`hints.keywords\` ` +
+          `${invented.map((word) => `"${word}"`).join(", ")} ` +
+          `${invented.length > 1 ? "do" : "does"} not appear in the turn's own ` +
+          `text: "${turn.text}". Every keyword must be a word from that line.`
+      );
+    }
+
+    const keywordContent = keywords.flatMap((keyword) =>
+      contentWords(keyword, targetTokens)
+    );
+    const extras = [...new Set(keywordContent)].filter(
+      (token) => !targetTokens.has(token)
+    );
+    if (extras.length > MAX_EXTRA_HINT_KEYWORDS) {
+      out.push(
+        `Turn ${n}'s \`hints.keywords\` adds ${extras.length} content words ` +
+          `beyond the target words (${extras.join(", ")}); at most ` +
+          `${MAX_EXTRA_HINT_KEYWORDS} are allowed. Drop the least necessary ones.`
+      );
+    }
+
+    // Rule 4 — level 2 must not rebuild the line. Skipped for lines with no
+    // more content words than a turn may have target words: level 2 is
+    // *required* to list those, so if they alone cover the line then no
+    // rewrite could ever clear the violation.
+    if (lineContent.length > MAX_TARGET_WORDS_PER_TURN) {
+      const covered = new Set(keywordContent);
+      if (lineContent.every((word) => covered.has(word))) {
+        out.push(
+          `Turn ${n}'s \`hints.keywords\` covers every content word of the ` +
+            `line, so joining them rebuilds "${turn.text}". No hint level may ` +
+            `reveal the whole line — leave something for the learner to produce.`
+        );
+      }
+    }
+  }
+
+  return out;
 }
 
 /**
  * Shape-only guard. Says nothing about the content rules — use
  * `validateScript` for those. Exists so `lib/history.ts` can tell a stored
- * v2 script from a legacy markdown entry without knowing the request that
+ * script from a legacy markdown entry without knowing the request that
  * produced it.
+ *
+ * Accepts **every** supported version, not just the current one: entries
+ * written before Story 1.3 hold a `version: 2` script with no hints, and they
+ * must keep loading. Only `validateScript` insists on the newest version,
+ * because only fresh model output has to be current.
  */
 export function isDialogueScript(value: unknown): value is DialogueScript {
   if (typeof value !== "object" || value === null) return false;
   const script = value as { version?: unknown; turns?: unknown };
-  if (script.version !== DIALOGUE_SCRIPT_VERSION) return false;
+  const version = script.version;
+  // No cast: asserting the version is a `DialogueScriptVersion` would assert
+  // the very thing this guard exists to establish.
+  if (typeof version !== "number") return false;
+  if (!SUPPORTED_SCRIPT_VERSIONS.some((supported) => supported === version)) {
+    return false;
+  }
   if (!Array.isArray(script.turns)) return false;
   return script.turns.every(isDialogueTurn);
+}
+
+/**
+ * Return `value` with any malformed `hints` removed, leaving everything else
+ * byte-identical (and returning the original object when nothing was wrong).
+ *
+ * `isDialogueTurn` rejects a turn whose hints are present but garbage, which
+ * is right for fresh model output and wrong for storage: one bad ladder would
+ * make `isDialogueScript` reject the whole script and the history entry would
+ * render as an empty legacy-markdown shell. Degrade the ladder, never the
+ * entry — `lib/history.ts` runs this on read. It does not touch what is on
+ * disk; nothing unrecognised is rewritten.
+ */
+export function withoutMalformedHints(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const script = value as { turns?: unknown };
+  if (!Array.isArray(script.turns)) return value;
+
+  let changed = false;
+  const turns = script.turns.map((turn) => {
+    if (typeof turn !== "object" || turn === null) return turn;
+    const candidate = turn as { hints?: unknown };
+    if (!("hints" in candidate) || isDialogueHints(candidate.hints)) return turn;
+    changed = true;
+    const stripped = { ...candidate };
+    delete stripped.hints;
+    return stripped;
+  });
+
+  return changed ? { ...script, turns } : value;
 }
 
 export function validateScript(
@@ -91,11 +318,13 @@ export function validateScript(
   requestedWords: string[]
 ): ValidationResult {
   const violations: string[] = [];
+  const hintViolations: string[] = [];
 
   if (typeof script !== "object" || script === null) {
     return {
       ok: false,
       violations: ["The script must be a JSON object with a `turns` array."],
+      hintViolations,
     };
   }
 
@@ -105,7 +334,7 @@ export function validateScript(
   }
   if (!Array.isArray(candidate.turns)) {
     violations.push("`turns` must be an array of turns.");
-    return { ok: false, violations };
+    return { ok: false, violations, hintViolations };
   }
 
   const turns: DialogueTurn[] = [];
@@ -116,12 +345,14 @@ export function validateScript(
     }
     violations.push(
       `Turn ${i + 1} is malformed. Every turn needs a numeric \`index\`, a ` +
-        `\`speaker\` of "system" or "learner", a string \`text\`, and a ` +
-        `\`targetWords\` array of strings.`
+        `\`speaker\` of "system" or "learner", a string \`text\`, a ` +
+        `\`targetWords\` array of strings, and — on a "learner" turn — a ` +
+        `\`hints\` object with a string \`situation\` and a \`keywords\` ` +
+        `array of strings.`
     );
   });
   if (turns.length !== candidate.turns.length) {
-    return { ok: false, violations };
+    return { ok: false, violations, hintViolations };
   }
 
   if (turns.length < MIN_TURNS || turns.length > MAX_TURNS) {
@@ -219,6 +450,8 @@ export function validateScript(
           `extras to other turns.`
       );
     }
+
+    hintViolations.push(...hintViolationsForTurn(turn, n));
   });
 
   if (claimed.size > MAX_TARGET_WORDS_PER_SCRIPT) {
@@ -238,5 +471,7 @@ export function validateScript(
     }
   }
 
-  return violations.length === 0 ? { ok: true } : { ok: false, violations };
+  return violations.length === 0 && hintViolations.length === 0
+    ? { ok: true }
+    : { ok: false, violations, hintViolations };
 }

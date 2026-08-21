@@ -1,25 +1,59 @@
 import { describe, expect, it } from "vitest";
-import { isDialogueScript, validateScript } from "./validate";
-import type { DialogueScript, DialogueTurn, Speaker } from "./types";
+import { isDialogueScript, validateScript, withoutMalformedHints } from "./validate";
+import { contentWords } from "./stopwords";
+import {
+  DIALOGUE_SCRIPT_VERSION,
+  type DialogueHints,
+  type DialogueScript,
+  type DialogueTurn,
+  type Speaker,
+} from "./types";
 
 type TurnSpec = {
   speaker: Speaker;
   text: string;
   targetWords?: string[];
+  /**
+   * Omit for the default: a valid ladder on learner turns, none on system
+   * turns. `null` strips the hints deliberately. Script-rule tests rewrite
+   * turns freely and should not have to restate a hint ladder to stay clear
+   * of the hint rules they are not testing.
+   */
+  hints?: DialogueHints | null;
 };
+
+/**
+ * A ladder that satisfies every hint rule whatever the line says. Keywords
+ * have to come from the line itself, so they are derived from it rather than
+ * invented.
+ */
+function defaultHints(spec: TurnSpec): DialogueHints {
+  const targets = spec.targetWords?.filter((word) => word.trim()) ?? [];
+  return {
+    situation: "Khi bạn muốn đáp lại người kia trong tình huống này.",
+    keywords: targets.length ? [...targets] : contentWords(spec.text).slice(0, 1),
+  };
+}
 
 /** Build a script, assigning `index` by position the way the route does. */
 function script(specs: TurnSpec[]): DialogueScript {
   return {
-    version: 2,
-    turns: specs.map(
-      (spec, index): DialogueTurn => ({
+    version: DIALOGUE_SCRIPT_VERSION,
+    turns: specs.map((spec, index): DialogueTurn => {
+      const hints =
+        spec.hints === undefined
+          ? spec.speaker === "learner"
+            ? defaultHints(spec)
+            : undefined
+          : (spec.hints ?? undefined);
+      return {
         index,
         speaker: spec.speaker,
         text: spec.text,
         targetWords: spec.targetWords ?? [],
-      })
-    ),
+        ...(hints ? { hints } : {}),
+      };
+    }),
   };
 }
 
@@ -29,15 +63,34 @@ const WORDS = ["cold", "weather", "expensive"];
 function validSpecs(): TurnSpec[] {
   return [
     { speaker: "system", text: "It is really cold outside today.", targetWords: ["cold"] },
-    { speaker: "learner", text: "I know, the weather changed fast.", targetWords: ["weather"] },
+    {
+      speaker: "learner",
+      text: "I know, the weather changed fast.",
+      targetWords: ["weather"],
+      hints: {
+        situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+        keywords: ["weather", "changed"],
+      },
+    },
     { speaker: "system", text: "Did you buy a new coat yet?" },
     {
       speaker: "learner",
       text: "Not yet, good coats are expensive right now.",
       targetWords: ["expensive"],
+      hints: {
+        situation: "Khi bạn giải thích vì sao mình chưa mua món đồ đó.",
+        keywords: ["expensive", "coats"],
+      },
     },
     { speaker: "system", text: "Some shops have a sale this week." },
-    { speaker: "learner", text: "Then I will look for a cheap one." },
+    {
+      speaker: "learner",
+      text: "Then I will look for a cheap one.",
+      hints: {
+        situation: "Khi bạn nói ra dự định tiếp theo của mình.",
+        keywords: ["look", "cheap"],
+      },
+    },
   ];
 }
 
@@ -48,6 +101,15 @@ function violationsOf(value: unknown, words: string[] = WORDS): string[] {
 
 function joined(value: unknown, words: string[] = WORDS): string {
   return violationsOf(value, words).join("\n");
+}
+
+function hintViolationsOf(value: unknown, words: string[] = WORDS): string[] {
+  const result = validateScript(value, words);
+  return result.ok ? [] : result.hintViolations;
+}
+
+function joinedHints(value: unknown, words: string[] = WORDS): string {
+  return hintViolationsOf(value, words).join("\n");
 }
 
 describe("validateScript — valid script", () => {
@@ -326,17 +388,30 @@ describe("validateScript — malformed input", () => {
   });
 
   it("rejects a wrong version", () => {
-    expect(joined({ version: 1, turns: [] })).toContain("`version` must be 2");
+    // Fresh model output must be the current generation. Version 2 is readable
+    // from storage (see `isDialogueScript`) but is never generated again.
+    expect(joined({ version: 1, turns: [] })).toContain("`version` must be 3");
+    expect(joined({ version: 2, turns: [] })).toContain("`version` must be 3");
   });
 
   it("rejects turns that is not an array", () => {
-    expect(joined({ version: 2, turns: "nope" })).toContain("must be an array of turns");
+    expect(joined({ version: 3, turns: "nope" })).toContain("must be an array of turns");
   });
 
   it("rejects an unknown speaker", () => {
     const bad = {
-      version: 2,
+      version: 3,
       turns: [{ index: 0, speaker: "narrator", text: "Hi", targetWords: [] }],
+    };
+    expect(joined(bad)).toContain("Turn 1 is malformed");
+  });
+
+  it("rejects a turn whose hints are not the right shape", () => {
+    const bad = {
+      version: 3,
+      turns: [
+        { index: 0, speaker: "learner", text: "Hi", targetWords: [], hints: "nope" },
+      ],
     };
     expect(joined(bad)).toContain("Turn 1 is malformed");
   });
@@ -354,9 +429,266 @@ describe("validateScript — malformed input", () => {
   });
 });
 
+describe("validateScript — hint ladder", () => {
+  it("accepts a script whose learner turns all carry a valid ladder", () => {
+    expect(validateScript(script(validSpecs()), WORDS)).toEqual({ ok: true });
+  });
+
+  it("reports a learner turn with no hints", () => {
+    const specs = validSpecs();
+    specs[1].hints = null;
+
+    expect(joinedHints(script(specs))).toContain(
+      'Turn 2 is a "learner" turn with no `hints`'
+    );
+  });
+
+  it("reports hints on a system turn", () => {
+    const specs = validSpecs();
+    specs[2].hints = {
+      situation: "Khi bạn hỏi thăm người kia.",
+      keywords: ["buy", "coat"],
+    };
+
+    expect(joinedHints(script(specs))).toContain(
+      'Turn 3 is a "system" turn but carries `hints`'
+    );
+  });
+
+  it("keeps hint violations out of the script violations", () => {
+    // The whole point of the second array: a script whose only faults are
+    // hints still passes every rule Epic 2 rests on.
+    const specs = validSpecs();
+    specs[1].hints = null;
+
+    const result = validateScript(script(specs), WORDS);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.violations).toEqual([]);
+    expect(result.hintViolations).toHaveLength(1);
+  });
+
+  describe("level 1 — the situation", () => {
+    it("rejects a situation that repeats the whole line", () => {
+      const specs = validSpecs();
+      specs[3].hints = {
+        situation: "Câu này nghĩa là: Not yet, good coats are expensive right now.",
+        keywords: ["expensive", "coats"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        "`hints.situation` contains the whole line"
+      );
+    });
+
+    it("rejects a situation borrowing 4 content words of the line in a row", () => {
+      const specs = validSpecs();
+      specs[3].hints = {
+        situation: "Khi bạn nói good coats are expensive right now với bạn mình.",
+        keywords: ["expensive", "coats"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        "reuses 4 content words of the line in a row"
+      );
+    });
+
+    it("rejects a short line quoted in full, below the 4-word threshold", () => {
+      // The window is clamped to the line: quoting both content words of a
+      // 2-word line reveals as much as quoting 4 words of a longer one.
+      const specs = validSpecs();
+      specs[5] = {
+        speaker: "learner",
+        text: "I will look for a cheap one.",
+        hints: {
+          situation: "Khi bạn nói mình sẽ look cheap một chút nữa.",
+          keywords: ["look"],
+        },
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        "reuses 2 content words of the line in a row"
+      );
+    });
+
+    it("rejects a situation written in English", () => {
+      // Cheap heuristic, deliberately a hint rule: level 1 is Vietnamese, and
+      // an English "situation" is usually a translation wearing a disguise.
+      const specs = validSpecs();
+      specs[1].hints = {
+        situation: "You agree that it turned cold.",
+        keywords: ["weather", "changed"],
+      };
+
+      expect(joinedHints(script(specs))).toContain("does not look like Vietnamese");
+    });
+
+    it("does not ask for Vietnamese in the script violations", () => {
+      const specs = validSpecs();
+      specs[1].hints = {
+        situation: "You agree that it turned cold.",
+        keywords: ["weather", "changed"],
+      };
+
+      expect(violationsOf(script(specs))).toEqual([]);
+    });
+
+    it("allows a situation that mentions the target word without quoting the line", () => {
+      const specs = validSpecs();
+      specs[3].hints = {
+        situation: "Khi bạn thấy một món đồ expensive và quyết định chưa mua.",
+        keywords: ["expensive", "coats"],
+      };
+
+      expect(hintViolationsOf(script(specs))).toEqual([]);
+    });
+
+    it("rejects an empty situation", () => {
+      const specs = validSpecs();
+      specs[1].hints = { situation: "   ", keywords: ["weather", "changed"] };
+
+      expect(joinedHints(script(specs))).toContain("empty `hints.situation`");
+    });
+  });
+
+  describe("level 2 — the keywords", () => {
+    it("rejects keywords that omit one of the turn's target words", () => {
+      const specs = validSpecs();
+      specs[3].hints = {
+        situation: "Khi bạn giải thích vì sao mình chưa mua món đồ đó.",
+        keywords: ["coats"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        '`hints.keywords` omits the target word "expensive"'
+      );
+    });
+
+    it("does not accept an inflected form in place of the target word", () => {
+      const specs = validSpecs();
+      specs[1].hints = {
+        situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+        keywords: ["weathering"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        '`hints.keywords` omits the target word "weather"'
+      );
+    });
+
+    it("rejects keywords carrying 3 content words beyond the target words", () => {
+      const specs = validSpecs();
+      specs[3].hints = {
+        situation: "Khi bạn giải thích vì sao mình chưa mua món đồ đó.",
+        keywords: ["expensive", "coats", "good", "now"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        "adds 3 content words beyond the target words"
+      );
+    });
+
+    it("allows exactly 2 extra content words, and does not count function words", () => {
+      const specs = validSpecs();
+      specs[1].hints = {
+        situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+        // "the" and "so" are function words: they buy the hint nothing, so
+        // they cost it nothing either.
+        keywords: ["weather", "the changed", "so fast"],
+      };
+
+      // Still a reconstruction of the line, but the extras rule itself passes.
+      expect(joinedHints(script(specs)).includes("content words beyond")).toBe(false);
+    });
+
+    it("rejects keywords that together rebuild the whole line", () => {
+      const specs = validSpecs();
+      specs[1] = {
+        speaker: "learner",
+        text: "The weather changed fast.",
+        targetWords: ["weather"],
+        hints: {
+          situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+          keywords: ["weather", "changed", "fast"],
+        },
+      };
+
+      const reported = joinedHints(script(specs));
+      expect(reported).toContain("covers every content word of the line");
+      // Two extras is within the limit — this is the reconstruction rule
+      // firing on its own, not the breadth rule in disguise.
+      expect(reported).not.toContain("content words beyond");
+    });
+
+    it("does not fire the reconstruction rule on a line the targets alone cover", () => {
+      // "look" and "cheap" are the only content words of turn 6; a hint that
+      // lists them is unavoidable, so this must not be an unfixable violation.
+      const specs = validSpecs();
+      expect(hintViolationsOf(script(specs))).toEqual([]);
+    });
+
+    it("rejects a keyword that is not in the turn's own line", () => {
+      const specs = validSpecs();
+      specs[1].hints = {
+        situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+        keywords: ["weather", "umbrella"],
+      };
+
+      expect(joinedHints(script(specs))).toContain(
+        `"umbrella" does not appear in the turn's own text`
+      );
+    });
+
+    it("counts a target word as content even when the stopword list has it", () => {
+      // An A2 deck ships `like` as vocabulary, and the stopword list has it as
+      // a preposition. The target word must still count as part of the line,
+      // or the leak rule quietly stops protecting it — note the reported
+      // window, which only contains "like" because the list was subtracted.
+      const specs = validSpecs();
+      specs[0] = { speaker: "system", text: "How do you feel about today?" };
+      specs[1] = {
+        speaker: "learner",
+        text: "I like the weather here.",
+        targetWords: ["like", "weather"],
+        hints: {
+          situation: "Khi bạn nói like weather với người kia.",
+          keywords: ["like", "weather"],
+        },
+      };
+
+      expect(joinedHints(script(specs), ["like", "weather", "expensive"])).toContain(
+        'reuses 2 content words of the line in a row ("like weather")'
+      );
+    });
+
+    it("rejects empty keywords", () => {
+      const specs = validSpecs();
+      specs[5].hints = {
+        situation: "Khi bạn nói ra dự định tiếp theo của mình.",
+        keywords: [],
+      };
+
+      expect(joinedHints(script(specs))).toContain("empty `hints.keywords`");
+    });
+  });
+});
+
 describe("isDialogueScript", () => {
-  it("accepts a well-formed v2 script", () => {
+  it("accepts a well-formed v3 script", () => {
     expect(isDialogueScript(script(validSpecs()))).toBe(true);
+  });
+
+  it("accepts a v2 script that predates hints", () => {
+    // The matrix row that keeps this morning's history entries loading: a
+    // stored script with no hints anywhere is still a script.
+    const legacy = {
+      version: 2,
+      turns: [
+        { index: 0, speaker: "system", text: "It is cold today.", targetWords: ["cold"] },
+        { index: 1, speaker: "learner", text: "Yes, very much so.", targetWords: [] },
+      ],
+    };
+    expect(isDialogueScript(legacy)).toBe(true);
   });
 
   it("rejects legacy markdown and other non-scripts", () => {
@@ -364,10 +696,59 @@ describe("isDialogueScript", () => {
     expect(isDialogueScript(null)).toBe(false);
     expect(isDialogueScript(undefined)).toBe(false);
     expect(isDialogueScript({ version: 1, turns: [] })).toBe(false);
-    expect(isDialogueScript({ version: 2 })).toBe(false);
+    expect(isDialogueScript({ version: 4, turns: [] })).toBe(false);
+    expect(isDialogueScript({ version: 3 })).toBe(false);
     expect(
-      isDialogueScript({ version: 2, turns: [{ index: 0, speaker: "x", text: "a", targetWords: [] }] })
+      isDialogueScript({ version: 3, turns: [{ index: 0, speaker: "x", text: "a", targetWords: [] }] })
     ).toBe(false);
+  });
+
+  it("accepts a stored script once its malformed hints are stripped", () => {
+    // The persistence guarantee: a garbled ladder costs the entry its hints,
+    // never its script. `lib/history.ts` runs this on read.
+    const stored = {
+      version: 3,
+      turns: [
+        { index: 0, speaker: "system", text: "It is cold today.", targetWords: ["cold"] },
+        {
+          index: 1,
+          speaker: "learner",
+          text: "Yes, very much so.",
+          targetWords: [],
+          hints: { situation: "Khi bạn đồng tình.", keywords: null },
+        },
+      ],
+    };
+
+    expect(isDialogueScript(stored)).toBe(false);
+
+    const repaired = withoutMalformedHints(stored);
+    expect(isDialogueScript(repaired)).toBe(true);
+    expect((repaired as DialogueScript).turns[1].hints).toBeUndefined();
+    // The rest of the entry is untouched, and the input is not mutated.
+    expect((repaired as DialogueScript).turns[0]).toBe(stored.turns[0]);
+    expect(stored.turns[1].hints).not.toBeUndefined();
+  });
+
+  it("returns the same object when every hint is well-formed", () => {
+    const good = script(validSpecs());
+    expect(withoutMalformedHints(good)).toBe(good);
+  });
+
+  it("rejects a turn whose hints are present but malformed", () => {
+    const bad = {
+      version: 3,
+      turns: [
+        {
+          index: 0,
+          speaker: "learner",
+          text: "a",
+          targetWords: [],
+          hints: { situation: "Khi bạn…", keywords: "not an array" },
+        },
+      ],
+    };
+    expect(isDialogueScript(bad)).toBe(false);
   });
 
   it("accepts a script that is well-formed but rule-breaking", () => {

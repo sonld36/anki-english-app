@@ -1,7 +1,7 @@
 import type { VocabularyItem } from "./vocabulary/types";
 import type { ContextId, DialogueLevel } from "./gemini";
 import type { DialogueScript } from "./dialogue/types";
-import { isDialogueScript } from "./dialogue/validate";
+import { isDialogueScript, withoutMalformedHints } from "./dialogue/validate";
 
 export interface HistoryEntry {
   id: string;
@@ -9,7 +9,11 @@ export interface HistoryEntry {
   cards: VocabularyItem[];
   context: ContextId;
   level: DialogueLevel;
-  /** The structured script (schema version 2), or `null` for a legacy entry. */
+  /**
+   * The structured script — version 3 (with hints) since Story 1.3, version 2
+   * (without) for anything stored before it. Both load; `hasHints(script)`
+   * says which one you got. `null` only for a legacy markdown entry.
+   */
   script: DialogueScript | null;
   /**
    * The markdown blob entries carried before Story 1.2. Present only when
@@ -45,7 +49,11 @@ type StoredHistoryEntry = Omit<
   "cards" | "script" | "legacyDialogue"
 > & {
   cards: StoredVocabularyItem[];
-  /** Schema version 2, written since Story 1.2. */
+  /**
+   * Schema version 2 (Story 1.2) or 3 (Story 1.3, hints included). Version is
+   * checked by `isDialogueScript`, which accepts both — the entries written
+   * this morning must not stop loading because a field was added.
+   */
   script?: DialogueScript;
   /** Schema version 1: one markdown string. Read-only, never written again. */
   dialogue?: string;
@@ -84,7 +92,11 @@ function isStoredEntry(value: unknown): value is StoredHistoryEntry {
 
 function normalizeEntry(entry: StoredHistoryEntry): HistoryEntry {
   const { cards, script, dialogue, ...rest } = entry;
-  const normalizedScript = isDialogueScript(script) ? script : null;
+  // A garbled hint ladder costs the entry its hints, never its script: without
+  // this, one malformed `hints` fails the shape guard and the whole entry
+  // falls back to the (empty) legacy markdown branch.
+  const repaired = withoutMalformedHints(script);
+  const normalizedScript = isDialogueScript(repaired) ? repaired : null;
   return {
     ...rest,
     cards: (cards ?? []).map(normalizeItem),
@@ -117,8 +129,8 @@ export const historyStorage = {
   },
 
   /**
-   * Only schema-version-2 entries are ever written. The legacy markdown shape
-   * is read-only by design, so it is not expressible here.
+   * Only the current schema version is ever written; older ones are read-only
+   * by design. The legacy markdown shape is not expressible here at all.
    */
   save(
     entry: Omit<HistoryEntry, "id" | "createdAt" | "legacyDialogue"> & {

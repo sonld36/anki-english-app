@@ -9,7 +9,13 @@ import type { DialogueScript } from "@/lib/dialogue/types";
  * happen, which model they go to, and which status the user ends up seeing.
  */
 
-type GeminiTurn = { speaker: string; text: string; targetWords: string[] };
+type GeminiHints = { situation: string; keywords: string[] };
+type GeminiTurn = {
+  speaker: string;
+  text: string;
+  targetWords: string[];
+  hints?: GeminiHints;
+};
 
 let calls: { model: string; prompt: string }[] = [];
 
@@ -21,9 +27,25 @@ const CARDS = [
 function validTurns(): GeminiTurn[] {
   return [
     { speaker: "system", text: "It is really cold outside today.", targetWords: ["cold"] },
-    { speaker: "learner", text: "I know, the weather changed fast.", targetWords: ["weather"] },
+    {
+      speaker: "learner",
+      text: "I know, the weather changed fast.",
+      targetWords: ["weather"],
+      hints: {
+        situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+        keywords: ["weather", "changed"],
+      },
+    },
     { speaker: "system", text: "Did you bring a warm coat?", targetWords: [] },
-    { speaker: "learner", text: "Yes, I found my old one.", targetWords: [] },
+    {
+      speaker: "learner",
+      text: "Yes, I found my old one.",
+      targetWords: [],
+      hints: {
+        situation: "Khi bạn trả lời rằng mình đã chuẩn bị xong.",
+        keywords: ["found", "old"],
+      },
+    },
     { speaker: "system", text: "Good, you will need it.", targetWords: [] },
   ];
 }
@@ -36,6 +58,13 @@ function invalidTurns(): GeminiTurn[] {
     text: "It is much colder outside today.",
     targetWords: ["cold"],
   };
+  return turns;
+}
+
+/** Every script rule met; only the hint ladder is wrong (a learner turn has none). */
+function hintOnlyBadTurns(): GeminiTurn[] {
+  const turns = validTurns();
+  delete turns[1].hints;
   return turns;
 }
 
@@ -99,11 +128,95 @@ describe("POST /api/dialogue — valid script", () => {
 
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
-    expect(body.script.version).toBe(2);
+    expect(body.script.version).toBe(3);
     expect(body.script.turns.map((t) => t.index)).toEqual([0, 1, 2, 3, 4]);
     expect(body.script.turns[0].speaker).toBe("system");
     expect(body.script.turns[0].targetWords).toEqual(["cold"]);
     expect(body.script.turns[1].targetWords).toEqual(["weather"]);
+  });
+
+  it("carries the hint ladder through on learner turns only", async () => {
+    // Hints ride along with the script in the same call — nothing is fetched
+    // later, so whatever is here is all the learner will ever get.
+    stubGemini([{ kind: "script", turns: validTurns() }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    expect(body.script.turns[1].hints).toEqual({
+      situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+      keywords: ["weather", "changed"],
+    });
+    expect(body.script.turns.filter((t) => t.hints).map((t) => t.speaker)).toEqual([
+      "learner",
+      "learner",
+    ]);
+  });
+
+  it("asks for hints in the response schema, without requiring them per turn", async () => {
+    const fetchMock = stubGemini([{ kind: "script", turns: validTurns() }]);
+
+    await POST(request());
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body ?? "{}");
+    const turnSchema = body.generationConfig.responseSchema.properties.turns.items;
+    expect(turnSchema.properties.hints.required).toEqual(["situation", "keywords"]);
+    // A system turn must be able to omit hints entirely.
+    expect(turnSchema.required).not.toContain("hints");
+  });
+
+  it("strips hints the model put on a system turn", async () => {
+    // They are kept through validation so the repair can be told about them,
+    // but "only learner turns carry hints" is an invariant of the stored
+    // shape: a script breaking it must never reach localStorage.
+    const turns = validTurns();
+    turns[2].hints = { situation: "Khi bạn hỏi thăm.", keywords: ["coat"] };
+    stubGemini([{ kind: "script", turns }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    expect(body.script.turns[2].hints).toBeUndefined();
+    // The repair heard about it before it was stripped.
+    expect(calls[1].prompt).toContain('Turn 3 is a "system" turn but carries `hints`');
+    // And the learner ladders survived.
+    expect(body.script.turns[1].hints?.keywords).toEqual(["weather", "changed"]);
+  });
+
+  it("200s on hints that are structurally junk rather than 422ing", async () => {
+    const turns = validTurns();
+    // Neither shape survives `buildHints`, so the turn reads as un-hinted —
+    // a hint fault, never a script fault.
+    (turns[1] as { hints?: unknown }).hints = [];
+    (turns[3] as { hints?: unknown }).hints = { situation: 42, keywords: [7] };
+    stubGemini([{ kind: "script", turns }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript; violations?: string[] };
+
+    expect(res.status).toBe(200);
+    expect(body.violations).toBeUndefined();
+    expect(body.script.turns[1].hints).toBeUndefined();
+    expect(body.script.turns[3].hints).toBeUndefined();
+    expect(calls[1].prompt).toContain('Turn 2 is a "learner" turn with no `hints`');
+  });
+
+  it("tells the model the hint rules in the prompt", async () => {
+    stubGemini([{ kind: "script", turns: validTurns() }]);
+
+    await POST(request());
+
+    expect(calls[0].prompt).toContain('EVERY "learner" turn must carry a "hints" object');
+    expect(calls[0].prompt).toContain("AT MOST 2 other content words");
+    expect(calls[0].prompt).toContain("No hint level may reveal the whole line");
+    // The prompt must state the rule the validator actually enforces: the
+    // same threshold, counted in content words.
+    expect(calls[0].prompt).toContain("never reuse 4 or more of its content words in a row");
+    expect(calls[0].prompt).toContain(
+      'EVERY keyword must be a word that literally appears in this turn\'s own "text"'
+    );
   });
 
   it("snaps target words back to the requested spelling", async () => {
@@ -225,6 +338,116 @@ describe("POST /api/dialogue — repair attempt", () => {
     expect(res.status).toBe(422);
     expect(body.error).toContain("chưa đạt yêu cầu");
     expect(body.violations.join("\n")).toContain('The target word "cold" never appears');
+  });
+
+  it("repairs once when only the hints are wrong, and takes the fix", async () => {
+    stubGemini([
+      { kind: "script", turns: hintOnlyBadTurns() },
+      { kind: "script", turns: validTurns() },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].prompt).toContain('Turn 2 is a "learner" turn with no `hints`');
+    expect(body.script.turns[1].hints?.keywords).toEqual(["weather", "changed"]);
+  });
+
+  it("returns the script with a 200 when only the hints are still wrong", async () => {
+    // Hints have no consumer until Story 2.4. A faulty rung must not cost the
+    // user a whole generation — the violations are logged, not surfaced.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubGemini([{ kind: "script", turns: hintOnlyBadTurns() }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as {
+      script: DialogueScript;
+      violations?: string[];
+    };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(200);
+    expect(body.script.turns).toHaveLength(5);
+    expect(body.script.turns[1].hints).toBeUndefined();
+    expect(body.violations).toBeUndefined();
+    expect(
+      warn.mock.calls.some(
+        (args) =>
+          String(args[0]).includes("accepted with faulty hints") &&
+          (args[1] as string[]).join("\n").includes(
+            'Turn 2 is a "learner" turn with no `hints`'
+          )
+      )
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("keeps a script-valid first attempt when the repair call transport-fails", async () => {
+    // The first attempt satisfied every rule Epic 2 rests on; only a rung of
+    // the ladder was wrong. A quota error on the repair must not turn that
+    // into a 500 and cost the user the script they already had.
+    stubGemini([
+      { kind: "script", turns: hintOnlyBadTurns() },
+      { kind: "http", status: 429, message: "Quota exceeded" },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script?: DialogueScript; error?: string };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(200);
+    expect(body.error).toBeUndefined();
+    expect(body.script?.turns).toHaveLength(5);
+    expect(body.script?.turns[0].text).toBe("It is really cold outside today.");
+  });
+
+  it("keeps a script-valid first attempt when the repair regresses", async () => {
+    // The repair broke a script rule that the first attempt obeyed. Returning
+    // the regression as a 422 would throw away a usable script over hints.
+    stubGemini([
+      { kind: "script", turns: hintOnlyBadTurns() },
+      { kind: "script", turns: invalidTurns() },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script?: DialogueScript; violations?: string[] };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(200);
+    expect(body.violations).toBeUndefined();
+    expect(body.script?.turns[0].text).toBe("It is really cold outside today.");
+  });
+
+  it("prefers the attempt with fewer hint faults when both are script-clean", async () => {
+    const worse = hintOnlyBadTurns();
+    delete worse[3].hints;
+    const better = hintOnlyBadTurns();
+
+    stubGemini([
+      { kind: "script", turns: worse },
+      { kind: "script", turns: better },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    // The repair fixed one of the two ladders; that is the one to keep.
+    expect(body.script.turns[3].hints?.keywords).toEqual(["found", "old"]);
+  });
+
+  it("still 422s when a script rule fails, whatever the hints say", async () => {
+    stubGemini([{ kind: "script", turns: invalidTurns() }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { error: string; violations: string[] };
+
+    expect(res.status).toBe(422);
+    expect(body.violations.join("\n")).toContain('The target word "cold" never appears');
+    // The 422 body stays script-level: hint faults are logged, never surfaced.
+    expect(body.violations.join("\n")).not.toContain("`hints`");
   });
 
   it("does not switch models when the failure is a rule violation", async () => {

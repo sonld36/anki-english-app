@@ -50,6 +50,14 @@ Pre-existing issues surfaced incidentally by reviews. Not caused by the story th
   summary: The validator does not enforce speaker alternation or a minimum number of learner turns, though the prompt asks for both.
   evidence: `validateScript` only checks that each speaker appears at least once, so four `system` turns followed by one `learner` turn passes. Learner turns are the entire point of Epic 2's practice loop, so a script that is 80% system turns is close to useless there. AGENTS.md tells future agents to change rules in the validator rather than the prompt, which makes this gap misleading as well as real.
 
+- source_spec: `spec-1-3-sinh-san-thang-goi-y-cung-kich-ban.md`
+  summary: `SUPPORTED_SCRIPT_VERSIONS` grows on every schema change and there is no migration path — old entries are read as-is forever.
+  evidence: Every consumer must branch on version indefinitely, and `hasHints` is the only affordance for doing so. Upgrading v2 entries in place on read (inside `normalizeEntry`) would let the array shrink back, but that means rewriting stored data — the one thing Stories 1.1–1.3 have deliberately never done. Worth an explicit decision before a version 4 exists.
+
+- source_spec: `spec-1-3-sinh-san-thang-goi-y-cung-kich-ban.md`
+  summary: `DialogueScript.version` is now the union `2 | 3`, so a v2 script type-checks everywhere a freshly generated one is expected.
+  evidence: Widening the literal to a union removed the compiler's ability to distinguish "something we can read" from "something we may write". `buildScript` and `historyStorage.save` both happen to write the current constant, so nothing is wrong today, but a write-side type (`DialogueScript & { version: typeof DIALOGUE_SCRIPT_VERSION }`) is what would keep it that way.
+
 - source_spec: `spec-1-2-kich-ban-thanh-du-lieu-co-cau-truc.md`
   summary: Trimming the deck to 20 target words is silent.
   evidence: `cards.slice(0, MAX_TARGET_WORDS_PER_SCRIPT)` drops everything past the twentieth card with no user-facing notice, so a learner who selected 35 words is never told that 15 of them are not in the script. Epic 3 replaces this selection logic with due-date logic, which is the natural place to fix it.

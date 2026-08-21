@@ -3,15 +3,18 @@ import type { VocabularyItem } from "@/lib/vocabulary/types";
 import type { DialogueLevel } from "@/lib/gemini";
 import {
   DIALOGUE_SCRIPT_VERSION,
+  MAX_EXTRA_HINT_KEYWORDS,
   MAX_TARGET_WORDS_PER_SCRIPT,
   MAX_TARGET_WORDS_PER_TURN,
   MAX_TURNS,
+  MIN_LEAKED_CONTENT_WORDS,
   MIN_TURNS,
+  type DialogueHints,
   type DialogueScript,
   type DialogueTurn,
   type Speaker,
 } from "@/lib/dialogue/types";
-import { validateScript } from "@/lib/dialogue/validate";
+import { validateScript, type ValidationResult } from "@/lib/dialogue/validate";
 
 /**
  * Gemini `responseSchema` (OpenAPI subset). `index` is deliberately absent —
@@ -33,9 +36,21 @@ const RESPONSE_SCHEMA = {
           speaker: { type: "string", enum: ["system", "learner"] },
           text: { type: "string" },
           targetWords: { type: "array", items: { type: "string" } },
+          // Deliberately absent from `required`: only "learner" turns carry
+          // hints, and the prompt says so. A "system" turn that sends them
+          // anyway is a hint violation, not a schema error.
+          hints: {
+            type: "object",
+            properties: {
+              situation: { type: "string" },
+              keywords: { type: "array", items: { type: "string" } },
+            },
+            required: ["situation", "keywords"],
+            propertyOrdering: ["situation", "keywords"],
+          },
         },
         required: ["speaker", "text", "targetWords"],
-        propertyOrdering: ["speaker", "text", "targetWords"],
+        propertyOrdering: ["speaker", "text", "targetWords", "hints"],
       },
     },
   },
@@ -129,6 +144,35 @@ async function callModel(
 }
 
 /**
+ * Shape a turn's hints without judging their content.
+ *
+ * Junk — a non-object, an array, or an object where neither field survives —
+ * becomes `undefined`, so the validator reports the clear "this learner turn
+ * has no hints" the repair prompt is tuned for rather than the misleading
+ * "empty situation" of a `{situation: "", keywords: []}` husk.
+ *
+ * Hints on a `system` turn are shaped and kept, not dropped: the validator has
+ * to see them to report them, and the repair attempt cannot fix what it was
+ * never told about. They are stripped at the point of return instead, so they
+ * can never reach storage.
+ */
+function buildHints(raw: unknown): DialogueHints | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const hints = raw as Partial<DialogueHints>;
+  const situation =
+    typeof hints.situation === "string" ? hints.situation.trim() : "";
+  const keywords = (Array.isArray(hints.keywords) ? hints.keywords : [])
+    .filter((word): word is string => typeof word === "string")
+    .map((word) => word.trim())
+    .filter(Boolean);
+
+  if (!situation && keywords.length === 0) return undefined;
+  return { situation, keywords };
+}
+
+/**
  * Turn raw model output into a `DialogueScript` without judging it. Anything
  * malformed is carried through as-is so `validateScript` can name it; the only
  * corrections made here are ones the model cannot get wrong: `index` comes
@@ -145,6 +189,7 @@ function buildScript(raw: unknown, requestedWords: string[]): DialogueScript {
   const turns: DialogueTurn[] = list.map((entry, index) => {
     const turn = (entry ?? {}) as Partial<DialogueTurn>;
     const targetWords = Array.isArray(turn.targetWords) ? turn.targetWords : [];
+    const hints = buildHints(turn.hints);
     return {
       index,
       // Not validated here on purpose — the validator reports a bad speaker.
@@ -153,10 +198,85 @@ function buildScript(raw: unknown, requestedWords: string[]): DialogueScript {
       targetWords: targetWords
         .filter((word): word is string => typeof word === "string")
         .map((word) => canonical.get(word.trim().toLowerCase()) ?? word.trim()),
+      ...(hints ? { hints } : {}),
     };
   });
 
   return { version: DIALOGUE_SCRIPT_VERSION, turns };
+}
+
+/** One generation attempt and the verdict on it. */
+type Attempt = { script: DialogueScript; result: ValidationResult };
+
+function evaluate(raw: unknown, requestedWords: string[]): Attempt {
+  const script = buildScript(raw, requestedWords);
+  return { script, result: validateScript(script, requestedWords) };
+}
+
+function scriptFaults(attempt: Attempt): string[] {
+  return attempt.result.ok ? [] : attempt.result.violations;
+}
+
+function hintFaults(attempt: Attempt): string[] {
+  return attempt.result.ok ? [] : attempt.result.hintViolations;
+}
+
+function allFaults(attempt: Attempt): string[] {
+  return [...scriptFaults(attempt), ...hintFaults(attempt)];
+}
+
+/** Does this attempt break no *script* rule? Its hints may still be wrong. */
+function isScriptClean(attempt: Attempt): boolean {
+  return scriptFaults(attempt).length === 0;
+}
+
+/**
+ * The attempt to hand the user, or `null` if none is usable.
+ *
+ * Script-clean is the bar: a script that breaks a rule Epic 2 rests on is not
+ * a script we may return at all. Among the ones that clear it, fewer hint
+ * faults wins; ties keep the earlier attempt, so a repair that changed nothing
+ * material does not churn the result.
+ */
+function bestAttempt(attempts: Attempt[]): Attempt | null {
+  const usable = attempts.filter(isScriptClean);
+  if (usable.length === 0) return null;
+  return usable.reduce((best, candidate) =>
+    hintFaults(candidate).length < hintFaults(best).length ? candidate : best
+  );
+}
+
+/** A turn stripped of hints, preserving field order. */
+function withoutHints(turn: DialogueTurn): DialogueTurn {
+  return {
+    index: turn.index,
+    speaker: turn.speaker,
+    text: turn.text,
+    targetWords: turn.targetWords,
+  };
+}
+
+/**
+ * Return a script to the client, dropping hints from any non-`learner` turn.
+ *
+ * They are kept through validation so the violation can be reported and
+ * repaired, but "only learner turns carry hints" is a documented invariant of
+ * the stored shape — a script that breaks it must not reach `localStorage`,
+ * where every later reader would inherit the problem.
+ */
+function respondWithScript(script: DialogueScript) {
+  const stray = script.turns.some(
+    (turn) => turn.speaker !== "learner" && turn.hints !== undefined
+  );
+  const clean = stray
+    ? {
+        ...script,
+        turns: script.turns.map((turn) =>
+          turn.speaker === "learner" ? turn : withoutHints(turn)
+        ),
+      }
+    : script;
+  return NextResponse.json({ script: clean });
 }
 
 function isDialogueLevel(value: unknown): value is DialogueLevel {
@@ -195,6 +315,13 @@ Requirements:
 - For every turn, "targetWords" must list exactly the target words that literally appear in that turn's "text", and nothing else. Never list a word that is not in the text, and never omit one that is. An inflected form does not count: if the text says "colder", the target word "cold" is NOT present in that turn.
 - Pronunciation constraint, important: a target word ending in -ed, -s, -d or -t must NOT be immediately followed by a word starting with that same consonant. Avoid "walked to", "cold drink", "needs some" — a native speaker does not release the ending there. Put a different word, or a comma, after the target word.
 - Make the dialogue feel authentic — not forced or robotic.
+
+Hints (the learner opens these when stuck mid-turn, so they must help without giving the line away):
+- EVERY "learner" turn must carry a "hints" object. NO "system" turn may carry one — the learner never has to produce a system line.
+- "hints.situation" is level 1, written in VIETNAMESE: one short sentence saying in what situation, or for what purpose, this line is said. It is NOT a translation of the line. Never write the English line inside it, and never reuse ${MIN_LEAKED_CONTENT_WORDS} or more of its content words in a row — content words are the meaning-carrying ones, so a/the/is/to and other function words are not counted, and neither is the gap between them.
+- Write level 1 as "Khi bạn muốn…" / "Lúc ai đó vừa…", not "Câu này có nghĩa là…".
+- "hints.keywords" is level 2: this turn's target words (exactly as spelled in "targetWords") plus AT MOST ${MAX_EXTRA_HINT_KEYWORDS} other content words. EVERY keyword must be a word that literally appears in this turn's own "text" — never invent one. English, no function words, no punctuation.
+- No hint level may reveal the whole line. The keywords together must never be enough to rebuild it — always leave some of the line for the learner to produce.
 
 Target vocabulary (ALL must appear):
 ${wordList}`;
@@ -288,51 +415,83 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const script = buildScript(firstAttempt.raw, requestedWords);
-  const result = validateScript(script, requestedWords);
-  if (result.ok) {
-    return NextResponse.json({ script });
+  const first = evaluate(firstAttempt.raw, requestedWords);
+  if (first.result.ok) {
+    return respondWithScript(first.script);
   }
 
   // Exactly one repair attempt, on the same model. A validation failure means
   // the model understood and got it wrong, so switching models is not the fix —
   // feeding back the specific violations is. The free tier allows one
   // concurrent request and a call runs 5–15s, so the loop stops here.
-  console.warn(`Script from ${workingModel} rejected:`, result.violations);
-  let violations = result.violations;
+  // Hint violations are worth the same one attempt as script violations: it is
+  // the only chance to fix them, since hints are never generated again.
+  const firstFaults = allFaults(first);
+  console.warn(
+    isScriptClean(first)
+      ? `Script from ${workingModel} is valid but its hints are not; repairing:`
+      : `Script from ${workingModel} rejected:`,
+    firstFaults
+  );
 
   const retry = await callModel(
     apiKey,
     workingModel,
-    buildRepairPrompt(basePrompt, firstAttempt.text, violations)
+    buildRepairPrompt(basePrompt, firstAttempt.text, firstFaults)
   );
 
-  if (!retry.ok) {
-    // The repair call never came back. That is a transport failure, not a rule
-    // failure — telling the user to change topic would be a lie, and only a
-    // validated rejection may produce a 422.
+  // Both attempts stay on the table. The rule the user agreed to is that a bad
+  // hint must never cost a whole generation, so a script-clean attempt is
+  // returned even when the *other* attempt is the one that came back — a
+  // transport failure on the repair, or a repair that regressed and broke a
+  // script rule, must not throw away a script that was already good enough.
+  const attempts: Attempt[] = [first];
+
+  if (retry.ok) {
+    const second = evaluate(retry.raw, requestedWords);
+    if (second.result.ok) {
+      return respondWithScript(second.script);
+    }
+    attempts.push(second);
+  } else if (!isScriptClean(first)) {
+    // Nothing worth keeping and the repair never came back: that is a
+    // transport failure, not a rule failure. Telling the user to change topic
+    // would be a lie, and only a validated rejection may produce a 422.
     console.error(`Repair attempt on ${workingModel} failed:`, retry.error);
     return NextResponse.json(
       { error: `Lỗi Gemini API: ${retry.error}` },
       { status: 500 }
     );
+  } else {
+    console.error(
+      `Repair attempt on ${workingModel} failed:`,
+      retry.error,
+      "— keeping the first attempt, whose script was valid."
+    );
   }
 
-  const retryScript = buildScript(retry.raw, requestedWords);
-  const retryResult = validateScript(retryScript, requestedWords);
-  if (retryResult.ok) {
-    return NextResponse.json({ script: retryScript });
+  // Hints that are still wrong must not cost the user their script. The script
+  // itself obeys every rule Epic 2 rests on; the hint ladder has no consumer
+  // until Story 2.4, and a bad rung is a worse hint, not a broken session.
+  const best = bestAttempt(attempts);
+  if (best) {
+    console.warn(
+      `Script from ${workingModel} accepted with faulty hints:`,
+      hintFaults(best)
+    );
+    return respondWithScript(best.script);
   }
 
-  violations = retryResult.violations;
-  console.warn(`Repaired script from ${workingModel} rejected:`, violations);
+  // No attempt was script-clean.
+  const last = attempts[attempts.length - 1];
+  console.warn(`Repaired script from ${workingModel} rejected:`, allFaults(last));
 
   // `violations` is diagnostic: English, model-facing, never shown to the user.
   return NextResponse.json(
     {
       error:
         "Kịch bản sinh ra chưa đạt yêu cầu sau 2 lần thử. Bạn hãy thử lại, hoặc đổi chủ đề / giảm số từ.",
-      violations,
+      violations: scriptFaults(last),
     },
     { status: 422 }
   );
