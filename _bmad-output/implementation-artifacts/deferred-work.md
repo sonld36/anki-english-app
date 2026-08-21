@@ -50,6 +50,22 @@ Pre-existing issues surfaced incidentally by reviews. Not caused by the story th
   summary: The validator does not enforce speaker alternation or a minimum number of learner turns, though the prompt asks for both.
   evidence: `validateScript` only checks that each speaker appears at least once, so four `system` turns followed by one `learner` turn passes. Learner turns are the entire point of Epic 2's practice loop, so a script that is 80% system turns is close to useless there. AGENTS.md tells future agents to change rules in the validator rather than the prompt, which makes this gap misleading as well as real.
 
+- source_spec: `spec-1-4-giong-mau-ban-ngu-sinh-mot-lan.md`
+  summary: The story's central claim — reopening a script makes zero `/api/tts` calls — has no UI path in the product and cannot be checked by hand.
+  evidence: All three review layers found this independently. `DialogueDisplay` is mounted from exactly one place (`app/deck/[deckName]/page.tsx`) and only for a script held in React state; a saved entry opens `/practice?id=…` → `VoicePractice`, which renders the script as one flattened markdown string with no per-turn control. A reload clears the state, so nothing re-renders a stored script. The claim is proven only by `pendingRequests` unit tests. Stored blobs are reused today only when a later generation happens to reproduce an identical line on the same role. Epic 2 builds the practice screen and should own the reopen path — decide there rather than bolting a reopen view onto Epic 1.
+
+- source_spec: `spec-1-4-giong-mau-ban-ngu-sinh-mot-lan.md`
+  summary: Per-entry audio cleanup is unsolved because blobs are content-keyed and deliberately shared between entries.
+  evidence: Deleting one history entry's audio keys can silently mute another entry that reuses the same line on the same role — the dedupe that saves Azure calls is exactly what makes deletion unsafe. Needs reference counting, or an accepted policy of only ever clearing the whole namespace. Story 1.4 wires `clear()` to `deleteNamespace("tts")` and stops there.
+
+- source_spec: `spec-1-4-giong-mau-ban-ngu-sinh-mot-lan.md`
+  summary: A throttled line (Azure F0 429) is marked failed permanently — no backoff, no `Retry-After`, no per-turn retry.
+  evidence: The free tier's rate limit is the stated reason generation is sequential, so on a 12-line script throttling is closer to the expected case than an edge case. The only recovery available to the user is regenerating the whole script, which also costs a Gemini call. Wants backoff plus a per-turn retry affordance.
+
+- source_spec: `spec-1-4-giong-mau-ban-ngu-sinh-mot-lan.md`
+  summary: "Generated once and kept" is not backed by a persistence request, and the hook/component layer has no automated tests.
+  evidence: No `navigator.storage.persist()` and no `estimate()` pre-check before writing roughly a dozen MP3s — a non-persisted origin may have the whole database evicted, and (given the reopen gap above) nothing would regenerate it. Separately, `useSampleAudio` and `SampleAudioControl` are untested because the suite is node-only with no jsdom; that is where the wiring between decision, transport and render lives, so it is hand-verified only.
+
 - source_spec: `spec-1-3-sinh-san-thang-goi-y-cung-kich-ban.md`
   summary: `SUPPORTED_SCRIPT_VERSIONS` grows on every schema change and there is no migration path — old entries are read as-is forever.
   evidence: Every consumer must branch on version indefinitely, and `hasHints` is the only affordance for doing so. Upgrading v2 entries in place on read (inside `normalizeEntry`) would let the array shrink back, but that means rewriting stored data — the one thing Stories 1.1–1.3 have deliberately never done. Worth an explicit decision before a version 4 exists.

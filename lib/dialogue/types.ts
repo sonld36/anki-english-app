@@ -24,6 +24,38 @@ export const SPEAKER_LABELS: Record<Speaker, string> = {
 };
 
 /**
+ * The Azure neural voice that reads each role's lines.
+ *
+ * Two *distinct* voices on purpose. The script has two roles and Epic 2 asks
+ * the learner to take one of them; one voice reading both parts removes the
+ * only cue that separates them by ear. Presentation-level speaker data, so it
+ * lives next to `SPEAKER_LABELS`.
+ */
+export const SPEAKER_VOICES: Record<Speaker, string> = {
+  system: "en-US-AndrewNeural",
+  learner: "en-US-AvaNeural",
+};
+
+/**
+ * Every voice `/api/tts` will synthesise.
+ *
+ * The voice name is interpolated into an SSML attribute, so it is checked
+ * against this list rather than escaped — same reflex as `ALLOWED_ACTIONS` in
+ * `app/api/anki/route.ts`: a closed set is the control, not sanitising.
+ *
+ * Written out independently of `SPEAKER_VOICES` on purpose. Derived as
+ * `Object.values(SPEAKER_VOICES)` the two could never disagree, and the test
+ * that checks they agree could never fail — while the failure it is supposed
+ * to catch (the app asking for a voice its own route rejects, so every sample
+ * 400s) stays perfectly possible via this list alone. Two declarations, one
+ * test, exactly like `DIALOGUE_SCRIPT_VERSION` and `SUPPORTED_SCRIPT_VERSIONS`.
+ */
+export const ALLOWED_VOICES: readonly string[] = [
+  "en-US-AndrewNeural",
+  "en-US-AvaNeural",
+];
+
+/**
  * The two-rung hint ladder for one learner turn, generated in the same model
  * call as the script and stored with it. Opening a hint must never cost a
  * network request, so the content has to exist before the learner stalls.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { highlightWords } from "@/lib/gemini";
 import { historyStorage } from "@/lib/history";
@@ -12,6 +12,109 @@ import {
   type DialogueScript,
 } from "@/lib/dialogue/types";
 import { renderHighlightedHtml } from "@/lib/dialogue/words";
+import { useSampleAudio } from "@/hooks/useSampleAudio";
+import type { SampleAudioStatus } from "@/lib/sample-audio";
+
+/**
+ * Per-turn play control for the native sample.
+ *
+ * Four states rather than a button that appears out of nowhere: the learner
+ * should be able to see that a line's audio is coming, has arrived, or failed
+ * — the script is readable throughout either way.
+ *
+ * Every label names *which* line it belongs to. A dozen controls all reading
+ * "Nghe giọng bản ngữ đọc câu này" is a list a screen-reader user cannot
+ * navigate, and `title` alone explains nothing to one.
+ */
+function SampleAudioControl({
+  status,
+  isPlaying,
+  speaker,
+  turnNumber,
+  onPlay,
+}: {
+  status: SampleAudioStatus;
+  isPlaying: boolean;
+  speaker: string;
+  turnNumber: number;
+  onPlay: () => void;
+}) {
+  const shared: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "22px",
+    height: "22px",
+    marginRight: "8px",
+    verticalAlign: "middle",
+    fontSize: "0.7rem",
+    borderRadius: "50%",
+    flexShrink: 0,
+  };
+  const which = `câu ${turnNumber} của ${speaker}`;
+
+  if (status === "fetching") {
+    return (
+      <span
+        style={{ ...shared, color: "var(--text-muted)" }}
+        title={`Đang thu giọng mẫu cho ${which}…`}
+        role="status"
+        aria-label={`Đang thu giọng mẫu cho ${which}`}
+      >
+        <span
+          className="spinner"
+          style={{
+            width: "12px",
+            height: "12px",
+            borderWidth: "2px",
+            borderTopColor: "var(--text-muted)",
+          }}
+        />
+      </span>
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <span
+        style={{ ...shared, color: "var(--accent-amber)" }}
+        title={`Không tạo được giọng mẫu cho ${which}. Kịch bản vẫn dùng bình thường.`}
+        role="img"
+        aria-label={`Không tạo được giọng mẫu cho ${which}`}
+      >
+        ⚠
+      </span>
+    );
+  }
+
+  if (status !== "ready") {
+    // Idle: the slot is held so lines do not shift sideways when audio lands.
+    return <span style={shared} aria-hidden="true" />;
+  }
+
+  const label = isPlaying
+    ? `Dừng phát ${which}`
+    : `Nghe giọng bản ngữ đọc ${which}`;
+
+  return (
+    <button
+      onClick={onPlay}
+      style={{
+        ...shared,
+        border: "1px solid var(--border-medium)",
+        background: isPlaying ? "var(--accent-primary)" : "var(--bg-elevated)",
+        color: isPlaying ? "white" : "var(--text-secondary)",
+        cursor: "pointer",
+        padding: 0,
+      }}
+      title={label}
+      aria-label={label}
+      aria-pressed={isPlaying}
+    >
+      {isPlaying ? "■" : "▶"}
+    </button>
+  );
+}
 
 interface DialogueDisplayProps {
   /** The structured script. `null` only for a legacy markdown entry. */
@@ -38,6 +141,8 @@ export default function DialogueDisplay({
   const [saved, setSaved] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  // Sample audio fills in behind the script — nothing here waits for it.
+  const sampleAudio = useSampleAudio(script);
 
   const words = cards.map((c) => c.word);
   const dialogue = legacyDialogue ?? "";
@@ -129,6 +234,24 @@ export default function DialogueDisplay({
         </div>
       </div>
 
+      {/* Storage notice. Said once, and never in place of the script: losing
+          the audio must not cost the user the lines. */}
+      {sampleAudio.notice && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: "rgba(245, 158, 11, 0.1)",
+            border: "1px solid rgba(245, 158, 11, 0.3)",
+            borderRadius: "10px",
+            color: "var(--accent-amber)",
+            fontSize: "0.8rem",
+          }}
+          role="status"
+        >
+          ⚠️ {sampleAudio.notice}
+        </div>
+      )}
+
       {/* Dialogue content */}
       <div
         className="card-elevated"
@@ -153,6 +276,13 @@ export default function DialogueDisplay({
               >
                 {SPEAKER_LABELS[turn.speaker]}
               </span>
+              <SampleAudioControl
+                status={sampleAudio.statuses[turn.index] ?? "idle"}
+                isPlaying={sampleAudio.playingTurn === turn.index}
+                speaker={SPEAKER_LABELS[turn.speaker]}
+                turnNumber={turn.index + 1}
+                onPlay={() => sampleAudio.play(turn.index)}
+              />
               <span
                 style={{ color: "var(--text-primary)", lineHeight: 1.7 }}
                 // Target words come from the turn's own data, not a substring

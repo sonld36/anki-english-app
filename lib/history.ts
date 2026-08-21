@@ -2,6 +2,8 @@ import type { VocabularyItem } from "./vocabulary/types";
 import type { ContextId, DialogueLevel } from "./gemini";
 import type { DialogueScript } from "./dialogue/types";
 import { isDialogueScript, withoutMalformedHints } from "./dialogue/validate";
+import { deleteNamespace } from "./blob-store";
+import { SAMPLE_AUDIO_NAMESPACE } from "./sample-audio";
 
 export interface HistoryEntry {
   id: string;
@@ -165,8 +167,21 @@ export const historyStorage = {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
   },
 
+  /**
+   * Clearing history clears the sample audio with it.
+   *
+   * Blobs are content-keyed and never rewritten, so without this every MP3
+   * ever generated outlives the entries it belonged to and quota exhaustion
+   * becomes the normal end state. Deliberately all-or-nothing: per-entry
+   * cleanup is *unsafe* here, because two entries that happen to share a line
+   * share its blob, and deleting one entry's keys would silently mute the
+   * other. Fire-and-forget — losing the audio must never cost the user the
+   * history delete, and this is called from `environment: "node"` tests where
+   * there is no IndexedDB at all.
+   */
   clear() {
     localStorage.removeItem(STORAGE_KEY);
+    void deleteNamespace(SAMPLE_AUDIO_NAMESPACE).catch(() => {});
   },
 };
 

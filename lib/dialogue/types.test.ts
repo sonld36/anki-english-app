@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DIALOGUE_SCRIPT_VERSION,
+  ALLOWED_VOICES,
   SPEAKER_LABELS,
+  SPEAKER_VOICES,
   SUPPORTED_SCRIPT_VERSIONS,
   hasHints,
   scriptTargetWords,
@@ -150,5 +152,27 @@ describe("turnHasHints", () => {
         hints: { situation: "Khi bạn đồng ý.", keywords: ["yes"] },
       })
     ).toBe(true);
+  });
+});
+
+describe("SPEAKER_VOICES", () => {
+  it("gives the two roles two different voices", () => {
+    // One voice reading both parts removes the only cue that separates the
+    // roles by ear — which is the whole point of generating samples at all.
+    expect(SPEAKER_VOICES.system).not.toBe(SPEAKER_VOICES.learner);
+  });
+
+  it("uses en-US voices for both roles", () => {
+    for (const voice of Object.values(SPEAKER_VOICES)) {
+      expect(voice.startsWith("en-US-")).toBe(true);
+    }
+  });
+
+  it("allows exactly the voices the roles use", () => {
+    // The TTS route checks the request against this list; a voice the app
+    // itself asks for and the route rejects would fail every sample silently.
+    expect([...ALLOWED_VOICES].sort()).toEqual(
+      Object.values(SPEAKER_VOICES).sort()
+    );
   });
 });
