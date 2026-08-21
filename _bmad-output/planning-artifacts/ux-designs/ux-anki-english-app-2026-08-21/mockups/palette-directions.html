@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hướng màu — Phòng tập phản xạ</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:#1b1b1f;color:#e7e7ea;padding:28px}
+  h1{font-size:1.4rem;margin-bottom:6px}
+  .sub{color:#9a9aa4;font-size:.85rem;margin-bottom:26px;max-width:760px;line-height:1.5}
+  .grid{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+  .col{width:310px}
+  .name{font-size:1rem;font-weight:700;margin-bottom:3px}
+  .reg{font-size:.76rem;color:#9a9aa4;margin-bottom:10px;line-height:1.4;min-height:32px}
+  .chips{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}
+  .chip{width:26px;height:26px;border-radius:6px;border:1px solid rgba(255,255,255,.18)}
+  .phone{border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.14)}
+  .bar{padding:9px 13px;font-size:.72rem;display:flex;justify-content:space-between;align-items:center}
+  .body{padding:13px;min-height:340px;display:flex;flex-direction:column;gap:9px}
+  .bub{padding:9px 12px;border-radius:13px;font-size:.79rem;line-height:1.45;max-width:88%}
+  .sys{align-self:flex-start;border-bottom-left-radius:4px}
+  .me{align-self:flex-end;border-bottom-right-radius:4px}
+  .hint{font-size:.7rem;padding:6px 9px;border-radius:8px;align-self:flex-start}
+  .res{font-size:.72rem;padding:9px 11px;border-radius:10px;align-self:flex-end;max-width:92%}
+  .w{display:inline-block;padding:1px 5px;border-radius:4px;margin:2px 3px 2px 0;font-size:.71rem}
+  .foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;padding-top:11px}
+  .mic{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.25rem}
+  .timer{font-size:.95rem;font-variant-numeric:tabular-nums;font-weight:600}
+  .hintbtn{font-size:.68rem;padding:5px 10px;border-radius:14px}
+  .note{font-size:.7rem;color:#8b8b95;margin-top:9px;line-height:1.45}
+</style></head><body>
+
+<h1>Năm hướng màu — cùng một màn hình luyện tập</h1>
+<p class="sub">Cùng một khoảnh khắc ở cả năm: hệ thống vừa nói xong, Sơn đã nói lượt của mình,
+kết quả chấm hiện ngay trong luồng — <b>commute</b> đạt, <b>deadline</b> bị nuốt âm /d/ cuối.
+Đồng hồ đếm lên, nút mic bấm–bấm. Điều cần so sánh: <b>lúc “Đạt” hiện ra, mắt anh có bắt được ngay không.</b></p>
+
+<div class="grid">
+
+<!-- 1. Rêu tối — chrome xanh nhạt, tín hiệu Đạt xanh bão hoà. bg #10150f card #171d15 chrome #7d9b78 success #34d97b danger #f26d7d -->
+<div class="col">
+  <div class="name">1 · Rêu tối</div>
+  <div class="reg">Chrome xanh xám trầm. Tín hiệu Đạt là xanh bão hoà — nổi bật vì xung quanh đã nhạt.</div>
+  <div class="chips"><i class="chip" style="background:#10150f"></i><i class="chip" style="background:#171d15"></i><i class="chip" style="background:#7d9b78"></i><i class="chip" style="background:#34d97b"></i><i class="chip" style="background:#f26d7d"></i></div>
+  <div class="phone" style="background:#10150f">
+    <div class="bar" style="background:#171d15;color:#7d9b78"><span>Quán cà phê · lượt 3/8</span><span>●●●○○○○○</span></div>
+    <div class="body">
+      <div class="bub sys" style="background:#1e261c;color:#d3dcd0">You look tired. Long <b style="color:#c8e6a0">commute</b> this morning?</div>
+      <div class="hint" style="background:#1b2319;color:#8fae89;border:1px solid #2b3628">💡 Tình huống: bạn than về việc đi làm và deadline</div>
+      <div class="bub me" style="background:#22301f;color:#e4ece1">Yeah, the commute was awful and I nearly missed my deadline.</div>
+      <div class="res" style="background:#161d14;border:1px solid #2b3628">
+        <div style="color:#34d97b;font-weight:700;margin-bottom:5px">✓ Đạt · 2,8 giây</div>
+        <span class="w" style="background:rgba(52,217,123,.18);color:#34d97b">commute ✓</span>
+        <span class="w" style="background:rgba(242,109,125,.18);color:#f26d7d">deadline · /d/ 12</span>
+      </div>
+      <div class="foot">
+        <span class="hintbtn" style="background:#1b2319;color:#8fae89">Gợi ý</span>
+        <span class="timer" style="color:#7d9b78">0:04</span>
+        <span class="mic" style="background:#34d97b;color:#0b1209">🎤</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Xanh lá làm cả nền lẫn tín hiệu — phân biệt bằng <b>độ bão hoà</b>.</p>
+</div>
+
+<!-- 2. Sương sớm — nền sáng. bg #f4f8f2 card #ffffff chrome #6f9e77 success #1f9d55 danger #d94f5c -->
+<div class="col">
+  <div class="name">2 · Sương sớm</div>
+  <div class="reg">Nền sáng, xanh lá rất nhạt. Cảm giác sạch và tỉnh — nhưng chói với mắt vừa ngủ dậy.</div>
+  <div class="chips"><i class="chip" style="background:#f4f8f2"></i><i class="chip" style="background:#fff"></i><i class="chip" style="background:#6f9e77"></i><i class="chip" style="background:#1f9d55"></i><i class="chip" style="background:#d94f5c"></i></div>
+  <div class="phone" style="background:#f4f8f2">
+    <div class="bar" style="background:#e6efe4;color:#4e7355"><span>Quán cà phê · lượt 3/8</span><span>●●●○○○○○</span></div>
+    <div class="body">
+      <div class="bub sys" style="background:#fff;color:#2c3830;border:1px solid #dfe9dc">You look tired. Long <b style="color:#1f7a45">commute</b> this morning?</div>
+      <div class="hint" style="background:#eaf3e8;color:#4e7355;border:1px solid #d5e4d2">💡 Tình huống: bạn than về việc đi làm và deadline</div>
+      <div class="bub me" style="background:#dceedd;color:#25352a">Yeah, the commute was awful and I nearly missed my deadline.</div>
+      <div class="res" style="background:#fff;border:1px solid #dfe9dc">
+        <div style="color:#1f9d55;font-weight:700;margin-bottom:5px">✓ Đạt · 2,8 giây</div>
+        <span class="w" style="background:rgba(31,157,85,.14);color:#177c42">commute ✓</span>
+        <span class="w" style="background:rgba(217,79,92,.14);color:#c03a47">deadline · /d/ 12</span>
+      </div>
+      <div class="foot">
+        <span class="hintbtn" style="background:#eaf3e8;color:#4e7355">Gợi ý</span>
+        <span class="timer" style="color:#6f9e77">0:04</span>
+        <span class="mic" style="background:#1f9d55;color:#fff">🎤</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Cùng cách chia như hướng 1, nhưng nền sáng. Cân nhắc giờ 5h30 sáng.</p>
+</div>
+
+<!-- 3. Lá và hổ phách — chrome xanh, tín hiệu Đạt hổ phách. bg #0e1410 chrome #6aa87a success #f2b23e danger #ef6b7a -->
+<div class="col">
+  <div class="name">3 · Lá &amp; hổ phách</div>
+  <div class="reg">Xanh lá là màu của app. Đạt báo bằng hổ phách — khác hẳn nền nên không thể nhầm.</div>
+  <div class="chips"><i class="chip" style="background:#0e1410"></i><i class="chip" style="background:#18231b"></i><i class="chip" style="background:#6aa87a"></i><i class="chip" style="background:#f2b23e"></i><i class="chip" style="background:#ef6b7a"></i></div>
+  <div class="phone" style="background:#0e1410">
+    <div class="bar" style="background:#18231b;color:#6aa87a"><span>Quán cà phê · lượt 3/8</span><span>●●●○○○○○</span></div>
+    <div class="body">
+      <div class="bub sys" style="background:#1a271d;color:#d6e3d8">You look tired. Long <b style="color:#8fd6a2">commute</b> this morning?</div>
+      <div class="hint" style="background:#16211a;color:#6aa87a;border:1px solid #253425">💡 Tình huống: bạn than về việc đi làm và deadline</div>
+      <div class="bub me" style="background:#20342a;color:#e2efe5">Yeah, the commute was awful and I nearly missed my deadline.</div>
+      <div class="res" style="background:#15201a;border:1px solid #253425">
+        <div style="color:#f2b23e;font-weight:700;margin-bottom:5px">★ Đạt · 2,8 giây</div>
+        <span class="w" style="background:rgba(242,178,62,.2);color:#f2b23e">commute ★</span>
+        <span class="w" style="background:rgba(239,107,122,.18);color:#ef6b7a">deadline · /d/ 12</span>
+      </div>
+      <div class="foot">
+        <span class="hintbtn" style="background:#16211a;color:#6aa87a">Gợi ý</span>
+        <span class="timer" style="color:#6aa87a">0:04</span>
+        <span class="mic" style="background:#6aa87a;color:#0b120d">🎤</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Đạt <b>không</b> dùng xanh lá — hổ phách mang cảm giác “phần thưởng”.</p>
+</div>
+
+<!-- 4. Chỉ hình, không màu — bg #0f1411 chrome #79a888 mọi trạng thái cùng tông -->
+<div class="col">
+  <div class="name">4 · Chỉ hình, không màu</div>
+  <div class="reg">Tất cả cùng một tông xanh. Đạt báo bằng dấu tích lớn và chuyển động, không đổi màu.</div>
+  <div class="chips"><i class="chip" style="background:#0f1411"></i><i class="chip" style="background:#19231c"></i><i class="chip" style="background:#79a888"></i><i class="chip" style="background:#cfe6d5"></i><i class="chip" style="background:#8fa396"></i></div>
+  <div class="phone" style="background:#0f1411">
+    <div class="bar" style="background:#19231c;color:#79a888"><span>Quán cà phê · lượt 3/8</span><span>●●●○○○○○</span></div>
+    <div class="body">
+      <div class="bub sys" style="background:#1b261e;color:#d2e0d6">You look tired. Long <b style="text-decoration:underline;text-underline-offset:3px">commute</b> this morning?</div>
+      <div class="hint" style="background:#17211a;color:#79a888;border:1px solid #26332a">💡 Tình huống: bạn than về việc đi làm và deadline</div>
+      <div class="bub me" style="background:#213029;color:#e0ece3">Yeah, the commute was awful and I nearly missed my deadline.</div>
+      <div class="res" style="background:#16201a;border:1px solid #26332a">
+        <div style="color:#cfe6d5;font-weight:700;margin-bottom:5px;font-size:1.05rem">✓✓ &nbsp;Đạt · 2,8 giây</div>
+        <span class="w" style="border:1px solid #79a888;color:#cfe6d5">commute ✓</span>
+        <span class="w" style="border:1px dashed #8fa396;color:#8fa396">deadline · /d/ 12 ⌁</span>
+      </div>
+      <div class="foot">
+        <span class="hintbtn" style="background:#17211a;color:#79a888">Gợi ý</span>
+        <span class="timer" style="color:#79a888">0:04</span>
+        <span class="mic" style="background:#79a888;color:#0c120e">🎤</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Không phụ thuộc màu ⇒ <b>an toàn cho người mù màu</b>. Nhưng phản hồi nhẹ hơn.</p>
+</div>
+
+<!-- 5. Xanh đậm — bg #0a120d chrome #22c55e success #4ade80 danger #fb7185 -->
+<div class="col">
+  <div class="name">5 · Xanh đậm</div>
+  <div class="reg">Xanh lá mạnh, tương phản cao. Năng lượng nhất — nhưng có thể gắt lúc 5h30 sáng.</div>
+  <div class="chips"><i class="chip" style="background:#0a120d"></i><i class="chip" style="background:#122018"></i><i class="chip" style="background:#22c55e"></i><i class="chip" style="background:#4ade80"></i><i class="chip" style="background:#fb7185"></i></div>
+  <div class="phone" style="background:#0a120d">
+    <div class="bar" style="background:#122018;color:#22c55e"><span>Quán cà phê · lượt 3/8</span><span>●●●○○○○○</span></div>
+    <div class="body">
+      <div class="bub sys" style="background:#14251a;color:#d8ecdf">You look tired. Long <b style="color:#4ade80">commute</b> this morning?</div>
+      <div class="hint" style="background:#102017;color:#22c55e;border:1px solid #1d3527">💡 Tình huống: bạn than về việc đi làm và deadline</div>
+      <div class="bub me" style="background:#16341f;color:#e6f5ea">Yeah, the commute was awful and I nearly missed my deadline.</div>
+      <div class="res" style="background:#0f1e15;border:1px solid #1d3527">
+        <div style="color:#4ade80;font-weight:700;margin-bottom:5px">✓ Đạt · 2,8 giây</div>
+        <span class="w" style="background:rgba(74,222,128,.2);color:#4ade80">commute ✓</span>
+        <span class="w" style="background:rgba(251,113,133,.2);color:#fb7185">deadline · /d/ 12</span>
+      </div>
+      <div class="foot">
+        <span class="hintbtn" style="background:#102017;color:#22c55e">Gợi ý</span>
+        <span class="timer" style="color:#22c55e">0:04</span>
+        <span class="mic" style="background:#22c55e;color:#06140b">🎤</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Trái nghĩa với “nhẹ nhàng” anh nói — để đây làm mốc so sánh.</p>
+</div>
+
+</div>
+</body></html>

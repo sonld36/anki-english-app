@@ -72,16 +72,18 @@ kỳ đâu trong tài liệu.*
 - **Thang gợi ý** — Hai nấc người dùng có thể mở khi bí, theo thứ tự: (1) tình
   huống **Câu đích** được dùng, (2) từ khoá. **Không có nấc hiện cả câu** — người
   dùng không bao giờ được đưa câu để đọc.
-- **Đạt** — Trạng thái của một **Lượt** khi mọi **Từ mục tiêu** vượt **cả hai** cửa:
-  (1) điểm chính xác cấp từ vượt ngưỡng, và (2) **mọi âm vị của từ đó** vượt ngưỡng
-  âm vị. Cửa thứ hai là cửa thật — đo lường cho thấy một từ bị nuốt phụ âm cuối vẫn
-  đạt 91 điểm ở cấp từ. Mở **Thang gợi ý** không làm mất trạng thái **Đạt**.
+- **Đạt** — Trạng thái của một **Lượt** khi **mọi âm vị của mọi Từ mục tiêu đạt từ 30
+  điểm trở lên**. Chỉ tầng âm vị quyết định; điểm cấp từ và điểm tổng **không** tham
+  gia — đo lường cho thấy chúng đi ngược chiều với chất lượng thật. Mở **Thang gợi ý**
+  không làm mất trạng thái **Đạt**.
 - **Nói ra được** — Một **Lượt** kết thúc ở trạng thái **Đạt**. Chỉ nói ra mà chưa
   **Đạt** thì không tính. Màn hình chính đếm số lần **Nói ra được** cho từng
   **Từ mục tiêu**.
 - **Độ trễ bật câu (TTFW)** — Khoảng thời gian từ lúc hiện **Lượt** đến âm đầu tiên
   người dùng phát ra. **Chỉ ghi nhận ở những Lượt không mở Thang gợi ý.**
 - **Thẻ đến hạn** — Từ vựng lịch giãn cách xếp vào buổi luyện của ngày hôm nay.
+- **Trình độ** — Mức A2, B1 hoặc B2 người dùng chọn, quyết định độ khó của từ ngữ và
+  cấu trúc câu trong **Kịch bản** (ngoài các **Từ mục tiêu**).
 
 ## 4. Tính năng
 
@@ -148,11 +150,15 @@ Với mỗi **Từ mục tiêu**, hệ thống hiện tổng số **Lượt** đ
 chứa các **Từ mục tiêu** đến hạn, kèm audio mẫu cho mọi lời thoại **và nội dung
 Thang gợi ý cho từng Lượt**. Tất cả sinh một lần rồi lưu lại.
 
-#### FR-5: Chọn chủ đề
-Người dùng chọn một chủ đề từ danh sách có sẵn trước khi sinh **Kịch bản**.
+#### FR-5: Chọn chủ đề và trình độ
+Người dùng chọn một chủ đề từ danh sách có sẵn và một **Trình độ** trước khi sinh
+**Kịch bản**.
 
 **Consequences (testable):**
-- Chọn chủ đề xong là sinh ngay, không thêm bước cấu hình nào.
+- Chọn xong là sinh ngay, không thêm bước cấu hình nào.
+- **Trình độ** chỉ chi phối phần ngôn ngữ ngoài **Từ mục tiêu**; từ vựng đến hạn luôn
+  xuất hiện bất kể trình độ.
+- Cả hai lựa chọn có giá trị mặc định để người dùng bấm thẳng vào luyện.
 
 #### FR-6: Sinh Kịch bản chứa Từ mục tiêu
 Hệ thống sinh **Kịch bản** đưa các **Từ mục tiêu** đến hạn vào **Câu đích** một cách
@@ -226,6 +232,9 @@ Khi người dùng đã thử 3 lần mà chưa **Đạt**, hệ thống hiện 
 và đánh dấu **Lượt** đó để lặp lại ở các buổi sau.
 
 **Consequences (testable):**
+- Kèm **một chỉ dẫn nhắm đúng âm vị đã hỏng** — nêu tên âm và một mẹo cấu âm cho người
+  Việt. Chỉ dẫn là văn bản viết sẵn đóng gói theo ứng dụng, **không sinh động lúc chạy**:
+  người dùng vừa thất bại ba lần, bắt họ đợi mạng lúc đó là tệ nhất.
 - **Lượt** này ghi là **chưa Đạt** và không làm tăng số lần **Nói ra được**.
 - **Từ mục tiêu** trong **Lượt** này được đánh dấu để FR-16 xếp lịch dày hơn.
 - Người dùng đi tiếp được, không bao giờ bị kẹt.
@@ -267,19 +276,32 @@ phát hiện lỗi nuốt phụ âm.
 - Phát hiện tầng 1 và tầng 2 dựa trên **điểm từng âm vị**, không dựa trên điểm cấp từ
   cũng không dựa trên cờ lỗi do dịch vụ chấm trả về.
 
-**Vì sao bắt buộc đọc tầng âm vị** — đo trên dịch vụ thật ngày 2026-08-20:
+**Vì sao bắt buộc đọc tầng âm vị** — đo trên giọng người Việt thật, 2026-08-21:
 
-| Đọc sai | Điểm cấp từ | Cờ lỗi dịch vụ | Điểm âm vị cuối |
-|---|---|---|---|
-| `arrive` thay `arrived` | 91 | *không báo* | **d = 0** |
-| `walk` thay `walked` | 97 | *không báo* | **t = 46** |
+| Câu | Đọc cẩn thận | **Cố tình nuốt âm cuối** |
+|---|---|---|
+| đuôi `-ed` | PronScore 86,0 | **92,8** |
+| âm `/θ/` | PronScore 87,7 | **91,9** |
 
-Điểm tổng của cả câu chênh **một điểm** giữa bản đọc đúng và bản nuốt hết đuôi từ.
-Làm theo cách thông thường thì sản phẩm bỏ sót đúng loại lỗi quan trọng nhất với
-người Việt.
+**Đọc cẩu thả được điểm cao hơn đọc cẩn thận ở 2 trên 3 câu.** Nguyên nhân: đọc cẩn
+thận thì chậm và ngắt hơn, làm `Fluency` và `Prosody` tụt nhiều hơn phần được ở độ
+chính xác. Chấm bằng điểm tổng sẽ **thưởng cho người nuốt âm và phạt người cố gắng**.
 
-`[GIẢ ĐỊNH]` Ngưỡng âm vị tạm đặt ở 50 — tách bạch tốt trên số liệu giọng tổng hợp
-(0–46 khi nuốt, 97–100 khi đúng). **Chưa hiệu chỉnh trên giọng người Việt thật.**
+Điểm cấp từ cũng vô dụng: từ `walked` đạt **97 điểm cấp từ** trong khi âm `/t/` cuối
+của nó là **0**. Cờ lỗi của dịch vụ trả về `None` cho chính từ đó.
+
+**Hai ngưỡng, hiệu chỉnh trên giọng người Việt thật ngày 2026-08-21** (9 bản thu, ba
+cách đọc, 17 âm vị cuối mục tiêu):
+
+| Ngưỡng | Dùng cho | Hành vi |
+|---|---|---|
+| **< 30** | Tầng 1 | Âm gần như không phát ra → **chặn Đạt** |
+| **< 60** | Tầng 2 | Âm có nhưng yếu → **cảnh báo, không chặn** |
+
+Bằng chứng: không lần đọc cẩn thận nào rơi dưới 30 (thấp nhất 35); lỗi nuốt cố ý rơi
+vào 0–5; giọng nói bình thường chặn đúng ba chỗ thật sự mất âm (0, 16, 16) và không
+chặn những chỗ yếu-nhưng-có (57, 64, 67, 71). Nâng lên 70 khiến 71% âm cuối trong giọng
+nói bình thường bị chặn — quá khắt khe. Nâng lên 80 làm 60% lần đọc cẩn thận trượt oan.
 
 #### FR-16: Nghe lại và tự so sánh
 Người dùng nghe lại bản thu của mình cạnh audio mẫu, không giới hạn số lần.
@@ -335,11 +357,18 @@ Người dùng xem tổng kết ngay sau khi kết thúc buổi.
 Hệ thống chọn tập **Từ mục tiêu** đến hạn cho mỗi ngày.
 
 **Consequences (testable):**
+- **Từ mục tiêu** kết thúc buổi ở trạng thái **Nói ra được** thì khoảng cách tới lần
+  sau tăng theo bậc: **1 → 3 → 7 → 14 ngày**.
+- **Từ mục tiêu** thuộc **Lượt** phải hiện đáp án (FR-12) quay lại **ngày hôm sau** và
+  tụt về bậc đầu tiên.
 - Một **Từ mục tiêu** không xuất hiện quá một buổi trong cùng một ngày.
-- Số thẻ mỗi ngày có giới hạn trên để buổi luyện không phình vô hạn.
+- Tối đa **20 Thẻ đến hạn** mỗi buổi — trùng với giới hạn từ mục tiêu mỗi **Kịch bản**.
+  Khi quá tải, ưu tiên từ đã từng trượt trước từ chưa bao giờ trượt.
+- Trạng thái lưu cho mỗi **Từ mục tiêu**: bậc hiện tại, ngày đến hạn, số lần
+  **Nói ra được**, số lần phải hiện đáp án.
 
-`[GIẢ ĐỊNH]` Thuật toán xếp lịch cụ thể chưa chốt. Ràng buộc bắt buộc: lặp phải trải
-qua nhiều ngày, không dồn trong buổi.
+Đây **không** phải thuật toán ghi nhớ cạnh tranh Anki — nó chỉ xếp lịch **Lượt** drill.
+Bốn bậc cố định, không có hệ số dễ/khó, không tự điều chỉnh.
 
 #### FR-21: Ưu tiên Lượt chưa Đạt
 **Từ mục tiêu** thuộc **Lượt** phải hiện đáp án quay lại sớm hơn và dày hơn
@@ -378,6 +407,12 @@ F1–F8 ở §4.
 - **Nạp từ bằng dán/tải file** — hoãn, nhưng nó chặn UJ-1 (xem §7).
 - **Tài khoản và đồng bộ đa thiết bị.**
 - **Trải nghiệm lần đầu** — màn hình chào, dẫn dắt, đăng ký.
+- **Giữ bản ghi qua nhiều buổi** để nghe lại và đối chiếu tiến bộ dài hạn. v1 chỉ giữ
+  bản ghi **trong một buổi**; hết buổi là mất. `[NOTE FOR PM]` Hoãn chứ không bỏ —
+  brief ghi đây là bằng chứng tiến bộ tốn 0đ.
+- **Màn hình tiến bộ dài hạn.** `[NOTE FOR PM]` Hệ quả: **Độ trễ bật câu** giảm dần theo
+  tuần — chỉ số Bắc Đẩu — không hiển thị cho người dùng ở v1. Họ chỉ thấy so sánh với
+  buổi liền trước.
 
 ## 7. Nền tảng
 
@@ -431,11 +466,11 @@ Không đặt tên sản phẩm gắn với Anki — nguồn từ vựng sẽ th
 
 ## 11. Câu hỏi còn mở
 
-1. ~~Ngưỡng **Đạt** đặt ở đâu?~~ **Đã giải quyết một phần 2026-08-20.** Ngưỡng cấp từ
-   60/70 đề xuất trong brief bị bác bỏ bằng đo lường — từ nuốt phụ âm cuối vẫn đạt 91.
-   Cửa quyết định chuyển xuống **tầng âm vị**, tạm đặt ở 50. **Còn lại:** hiệu chỉnh
-   con số này trên giọng người Việt thật.
-2. Thuật toán xếp lịch giãn cách cụ thể (FR-20) — quy tắc nào quyết định ngày quay lại?
+1. ~~Ngưỡng **Đạt** đặt ở đâu?~~ **Đã đóng 2026-08-21.** Hiệu chỉnh trên giọng người
+   Việt thật: chặn ở **âm vị < 30**, cảnh báo ở **< 60**. Ngưỡng cấp từ trong brief bị
+   bác bỏ bằng số liệu.
+2. ~~Thuật toán xếp lịch giãn cách (FR-20)~~ **Đã chốt 2026-08-20:** bậc cố định
+   1/3/7/14 ngày, trượt thì về ngày mai và về bậc đầu.
 3. Biểu đồ tiến bộ xử lý thế nào khi tuần đầu gần như không có số liệu **Độ trễ bật
    câu**, và khi các **Lượt** khó dần lọt vào nhóm không-gợi-ý làm trung bình xấu đi
    vì lý do chọn mẫu?
@@ -449,8 +484,6 @@ Không đặt tên sản phẩm gắn với Anki — nguồn từ vựng sẽ th
   hiệu chỉnh.
 - §4.4 FR-12 — Hiện đáp án sau đúng 3 lần chưa **Đạt**; con số do tôi đề xuất, anh
   chưa xác nhận.
-- §4.8 FR-20 — Thuật toán xếp lịch chưa chốt; chỉ ràng buộc "trải nhiều ngày".
-- §4.5 FR-15 — Ngưỡng âm vị 50; suy từ số liệu giọng tổng hợp, chưa kiểm trên giọng
-  người Việt thật.
-- §3 **Đạt** — Ngưỡng cấp từ vẫn để ngỏ; nó chỉ còn là cửa phụ bắt lỗi phát âm sai
-  nặng, cửa chính là tầng âm vị.
+- §4.5 FR-15 — Ngưỡng 30/60 hiệu chỉnh trên **một người nói, 9 bản thu**. Cần kiểm lại
+  khi có thêm người dùng.
+- §8 — Chưa thử tắt khử ồn của trình duyệt; cả 9 bản thu hiệu chỉnh đều bật.

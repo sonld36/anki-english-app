@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { encodeWav, peakLevel } from "@/lib/wav";
 
 /**
@@ -69,11 +69,20 @@ interface AzureNBest {
 
 interface RunResult {
   id: number;
+  recordingId: number;
   provider: string;
   latencyMs: number;
   noiseSuppression: boolean;
+  referenceText: string;
+  readingStyle: string;
   raw: Record<string, unknown>;
 }
+
+// Reading styles for calibration: the point of the exercise is to see where
+// "normal" speech falls relative to deliberate-best and deliberate-sloppy.
+const READING_STYLES = ["chuẩn", "nuốt âm cuối", "bình thường"] as const;
+
+const RUNS_KEY = "pronunciation_lab_runs";
 
 function scoreColor(score: number): string {
   if (score >= 80) return "#22c55e";
@@ -121,12 +130,42 @@ export default function PronunciationLabPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunResult[]>([]);
+  const [readingStyle, setReadingStyle] = useState<string>(READING_STYLES[0]);
 
   const chunksRef = useRef<Int16Array[]>([]);
   const ctxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const blobRef = useRef<Blob | null>(null);
   const runIdRef = useRef(0);
+  const recordingIdRef = useRef(0);
+
+  // Restore any previous session's runs, and persist on every change — losing a
+  // calibration session to a page reload is not acceptable.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(RUNS_KEY);
+      if (saved) {
+        const parsed: RunResult[] = JSON.parse(saved);
+        // localStorage is exactly the "external system" effects exist to sync
+        // with; this runs once on mount, so there is no cascading-render risk.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setRuns(parsed);
+        runIdRef.current = parsed.reduce((m, r) => Math.max(m, r.id), 0);
+        recordingIdRef.current = parsed.reduce((m, r) => Math.max(m, r.recordingId), 0);
+      }
+    } catch {
+      /* corrupt or oversized storage — start clean rather than blocking the lab */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!runs.length) return;
+    try {
+      localStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+    } catch {
+      /* quota exceeded — the in-memory runs and the export button still work */
+    }
+  }, [runs]);
 
   const startRecording = useCallback(async () => {
     setError(null);
@@ -194,7 +233,7 @@ export default function PronunciationLabPage() {
         `đỉnh ${(peak * 100).toFixed(0)}%` +
         (peak < 0.05 ? " ⚠️ quá nhỏ, có thể sai mic" : "")
     );
-    setRuns([]);
+    recordingIdRef.current += 1;
   }, [audioUrl]);
 
   const assess = useCallback(
@@ -227,9 +266,12 @@ export default function PronunciationLabPage() {
           ...prev,
           {
             id: ++runIdRef.current,
+            recordingId: recordingIdRef.current,
             provider: data.provider,
             latencyMs: data.latencyMs,
             noiseSuppression,
+            referenceText,
+            readingStyle,
             raw: data.raw,
           },
         ]);
@@ -239,10 +281,27 @@ export default function PronunciationLabPage() {
         setBusy(false);
       }
     },
-    [referenceText, noiseSuppression]
+    [referenceText, noiseSuppression, readingStyle]
   );
 
   const azureRuns = runs.filter((r) => r.provider === "azure");
+
+  function exportRuns() {
+    const blob = new Blob([JSON.stringify(runs, null, 2)], {
+      type: "application/json",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "pronunciation-calibration.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function clearRuns() {
+    if (!confirm(`Xoá toàn bộ ${runs.length} lần chấm đã lưu?`)) return;
+    setRuns([]);
+    localStorage.removeItem(RUNS_KEY);
+  }
 
   return (
     <div style={{ maxWidth: "980px", margin: "0 auto", padding: "32px 20px 80px" }}>
@@ -314,6 +373,21 @@ export default function PronunciationLabPage() {
           </span>
         </label>
 
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "14px", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.85rem" }}>Cách đọc:</span>
+          {READING_STYLES.map((s) => (
+            <button
+              key={s}
+              onClick={() => setReadingStyle(s)}
+              disabled={recording}
+              className={readingStyle === s ? "btn-primary" : "btn-secondary"}
+              style={{ fontSize: "0.78rem", padding: "6px 12px" }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={recording ? stopRecording : startRecording}
@@ -349,6 +423,20 @@ export default function PronunciationLabPage() {
         </div>
         {error && (
           <p style={{ color: "#f43f5e", fontSize: "0.85rem", marginTop: "12px" }}>⚠️ {error}</p>
+        )}
+
+        {runs.length > 0 && (
+          <div style={{ display: "flex", gap: "10px", marginTop: "16px", alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={exportRuns} className="btn-secondary">
+              ⬇ Tải kết quả ({runs.length} lần)
+            </button>
+            <button onClick={clearRuns} className="btn-danger" style={{ fontSize: "0.8rem" }}>
+              Xoá hết
+            </button>
+            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              Kết quả tự lưu — tải lại trang không mất
+            </span>
+          </div>
         )}
       </section>
 
@@ -416,7 +504,8 @@ function ResultCard({ run }: { run: RunResult }) {
     return (
       <section className="card" style={{ marginTop: "16px", padding: "20px" }}>
         <h2 style={{ fontSize: "1rem", fontWeight: 700 }}>
-          #{run.id} · Gemini <span className="badge badge-purple">đối chứng</span>
+          #{run.id} · Gemini <span className="badge badge-purple">đối chứng</span>{" "}
+        <span className="badge">{run.readingStyle}</span>
         </h2>
         <div style={{ display: "flex", gap: "10px", margin: "14px 0", flexWrap: "wrap" }}>
           <ScoreChip label="Tổng" value={g.overallScore} />
@@ -456,7 +545,9 @@ function ResultCard({ run }: { run: RunResult }) {
         #{run.id} · Azure{" "}
         <span className="badge badge-blue">
           {run.noiseSuppression ? "khử ồn BẬT" : "khử ồn TẮT"}
-        </span>
+        </span>{" "}
+        <span className="badge badge-amber">{run.readingStyle}</span>{" "}
+        <span className="badge">bản thu #{run.recordingId}</span>
       </h2>
 
       <div style={{ display: "flex", gap: "10px", margin: "14px 0", flexWrap: "wrap" }}>
@@ -467,6 +558,10 @@ function ResultCard({ run }: { run: RunResult }) {
         <ScoreChip label="Đầy đủ" value={scores?.CompletenessScore} />
       </div>
 
+      <p style={{ fontSize: "0.85rem", marginBottom: "4px" }}>
+        <strong>Câu tham chiếu:</strong>{" "}
+        <span style={{ fontFamily: "monospace", opacity: 0.8 }}>{run.referenceText}</span>
+      </p>
       <p style={{ fontSize: "0.85rem", marginBottom: "12px" }}>
         <strong>Nghe thành:</strong>{" "}
         <span style={{ fontFamily: "monospace" }}>
