@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import type { ParsedCard } from "@/lib/anki";
+import type { VocabularyItem } from "@/lib/vocabulary/types";
 
 interface FlashcardListProps {
-  cards: ParsedCard[];
+  cards: VocabularyItem[];
   highlightedWords?: string[];
 }
 
-function FlashcardItem({ card, highlight }: { card: ParsedCard; highlight: boolean }) {
+function FlashcardItem({ card, highlight }: { card: VocabularyItem; highlight: boolean }) {
   const [flipped, setFlipped] = useState(false);
 
   return (

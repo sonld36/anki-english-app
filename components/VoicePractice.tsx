@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { historyStorage, type HistoryEntry, type PracticeMessage } from "@/lib/history";
 import { useGeminiLive } from "@/hooks/useGeminiLive";
 import { highlightWords } from "@/lib/gemini";
-import type { ParsedCard } from "@/lib/anki";
 
 interface VoicePracticeProps {
   entry: HistoryEntry;

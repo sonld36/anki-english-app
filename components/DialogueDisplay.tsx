@@ -4,12 +4,12 @@ import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { highlightWords } from "@/lib/gemini";
 import { historyStorage } from "@/lib/history";
-import type { ParsedCard } from "@/lib/anki";
+import type { VocabularyItem } from "@/lib/vocabulary/types";
 import type { ContextId, DialogueLevel } from "@/lib/gemini";
 
 interface DialogueDisplayProps {
   dialogue: string;
-  cards: ParsedCard[];
+  cards: VocabularyItem[];
   deckName: string;
   context: ContextId;
   level: DialogueLevel;

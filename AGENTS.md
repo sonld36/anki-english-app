@@ -13,14 +13,16 @@ Single-flow app (no auth, no database) that turns an Anki deck into an AI-genera
 
 ## Where things are
 
-- Anki access: `lib/anki.ts`, proxied through `app/api/anki/route.ts` — never call `http://127.0.0.1:8765` (AnkiConnect) directly from client code, it has no CORS headers.
+- Vocabulary loading: `lib/vocabulary/` — `types.ts` holds the neutral, transport-free `VocabularyItem` / `VocabularyCollection` types **and** the `VocabularySource` contract (import these, never source-specific ones); `source.ts` holds only the registry (`getVocabularySource()`, defaults to Anki) and re-exports the interface; `sources/anki.ts` is the one concrete implementation; `setup-hint.ts` parses a source's connection-help steps (`**bold**`, `` `code` ``) into React-free segments. Anki internals (`AnkiCard`, HTTP calls, field parsing) are module-private — add a new source as a sibling under `sources/`, don't widen the Anki module's exports. Concrete sources import the interface from `types.ts`, never from `source.ts`, so the registry stays a leaf.
+- Anki access goes through `app/api/anki/route.ts` — never call `http://127.0.0.1:8765` (AnkiConnect) directly from client code, it has no CORS headers.
 - Dialogue generation: `lib/gemini.ts` + `app/api/dialogue/route.ts`.
 - Voice practice: `hooks/useGeminiLive.ts` + `public/audio-processor.worklet.js`.
 - History/persistence: `lib/history.ts` — the only persistence layer in the app.
 
 ## Running and verifying
 
-- No test suite exists in this repo — don't assume one.
+- Tests run with Vitest: `npm test` (`vitest run`, config in `vitest.config.mts` — the `.mts` extension is deliberate, `.ts` triggers a Vite `configLoader` deprecation warning). Specs are `*.test.ts` next to the code, under `lib/`, `app/`, `components/`, or `hooks/`. Coverage is thin and node-environment only — there is no jsdom, so no component or E2E testing setup; a `.test.tsx` will be collected and then fail for want of a DOM.
+- `npm run lint` is **not** clean and isn't expected to be: 3 pre-existing `react-hooks/set-state-in-effect` errors at `app/page.tsx:15`, `app/practice/page.tsx:18`, `components/HistoryPanel.tsx:19`, plus assorted unused-var warnings. They predate the vocabulary-source refactor — don't go chasing them as if you broke something. `npx tsc --noEmit` and `npm run build` are clean, and should stay that way.
 - Anki Desktop + the AnkiConnect add-on must be running locally on port 8765 for anything past the landing page to work; there's no way to tell this from the code alone.
 - `GEMINI_API_KEY` must be set in `.env.local`; the literal placeholder `"your_gemini_api_key_here"` is treated as "not configured" by app code.
 

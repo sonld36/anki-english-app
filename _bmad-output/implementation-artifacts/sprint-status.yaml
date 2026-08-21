@@ -1,0 +1,93 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 08-21-2026 00:00
+last_updated: 08-21-2026 15:20
+project: anki-english-app
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: in-progress
+  1-1-nạp-từ-vựng-qua-lớp-nguồn-thay-thế-được: review
+  1-2-kịch-bản-thành-dữ-liệu-có-cấu-trúc: backlog
+  1-3-sinh-sẵn-thang-gợi-ý-cùng-kịch-bản: backlog
+  1-4-giọng-mẫu-bản-ngữ-sinh-một-lần-và-giữ-lại: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-diễn-kịch-bản-theo-lượt-trong-khung-chat: backlog
+  2-2-ghi-âm-lượt-của-mình-và-nghe-lại-cạnh-giọng-mẫu: backlog
+  2-3-chấm-điểm-ngay-trong-luồng-chat: backlog
+  2-4-thang-gợi-ý-hai-nấc: backlog
+  2-5-giới-hạn-3-lần-thử-và-hiện-đáp-án-khi-hết-lượt: backlog
+  2-6-đo-độ-trễ-bật-câu: backlog
+  2-7-bảng-tổng-kết-cuối-buổi: backlog
+  2-8-gỡ-đường-gemini-live-và-bịt-lỗ-api-key: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-trạng-thái-luyện-tập-cho-từng-từ: backlog
+  3-2-lịch-giãn-cách-1-3-7-14: backlog
+  3-3-buổi-luyện-lấy-từ-đến-hạn: backlog
+  3-4-màn-hình-chính-hiện-thẻ-đến-hạn-hôm-nay: backlog
+  epic-3-retrospective: optional
+
+# Ghi nhận từ cổng sẵn sàng (sprint planning 21/08/2026).
+# Gốc chung: tài liệu UX (21/08) viết SAU epics.md, một số quyết định chưa truy ngược vào story.
+action_items:
+  - epic: 2
+    action: "Chưa có story cho chế độ sáng/tối và bề mặt Cài đặt. DESIGN.md định nghĩa đủ 22 token hai chế độ và bắt buộc người dùng tự gạt trong app; PRD không ghi ở phạm vi lẫn ngoài phạm vi. Phải chốt TRƯỚC khi bắt đầu Story 2.1 — mọi story UI sẽ phải tự đoán là dựng một hay hai chế độ."
+    owner: "Anh zai"
+    status: open
+  - epic: 3
+    action: "Mâu thuẫn: UX Bề mặt 3 (Chuẩn bị buổi) cho người dùng chọn 'số từ dùng cho buổi này', còn Story 3.3 chốt cứng tối đa 20 từ, không có điều khiển của người dùng. Chọn một."
+    owner: "Anh zai"
+    status: open
+  - epic: 2
+    action: "Thiếu AC: hàng đợi chấm điểm khi mất mạng. EXPERIENCE.md yêu cầu xếp hàng rồi gửi khi có mạng lại; AC duy nhất về lỗi của Story 2.3 chỉ là 'báo rõ, buổi vẫn đi tiếp'. NFR-4 phủ việc giữ số liệu, không phủ hàng đợi."
+    owner: "Anh zai"
+    status: open
+  - epic: 2
+    action: "Thiếu AC: người dùng từ chối quyền micro. EXPERIENCE.md định nghĩa hành vi (nói rõ vì sao cần, chỉ cách bật lại, không xin lại lần nữa); Story 2.2 không có AC nào."
+    owner: "Anh zai"
+    status: open
+  - epic: 1
+    action: "Thiếu AC: kể tiến trình lúc chờ sinh kịch bản ('Đang chọn từ… đang viết hội thoại… đang thu giọng mẫu…'). EXPERIENCE.md yêu cầu; Story 1.2 và 1.4 không có AC."
+    owner: "Anh zai"
+    status: open
+  - epic: 1
+    action: "Vệ sinh tài liệu: epics.md vẫn ghi 'Không có tài liệu UX' và liệt kê câu hỏi mở #3–#5 của PRD là chưa trả lời, trong khi UX docs đã có và đã trả lời. Gây hiểu nhầm cho người chỉ đọc epics.md."
+    owner: "Anh zai"
+    status: open
+  - epic: 2
+    action: "Vệ sinh tài liệu: phụ lục PRD dòng 103 ghi ngưỡng âm vị 'tạm 50'; PRD dòng 293 đã thay bằng 30/60 hiệu chỉnh trên giọng người Việt thật. Epics và DESIGN.md dùng 30/60. Sửa dòng cũ trong phụ lục."
+    owner: "Anh zai"
+    status: open

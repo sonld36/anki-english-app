@@ -1,10 +1,10 @@
-import type { ParsedCard } from "./anki";
+import type { VocabularyItem } from "./vocabulary/types";
 import type { ContextId, DialogueLevel } from "./gemini";
 
 export interface HistoryEntry {
   id: string;
   deckName: string;
-  cards: ParsedCard[];
+  cards: VocabularyItem[];
   context: ContextId;
   level: DialogueLevel;
   dialogue: string;
@@ -21,14 +21,52 @@ export interface PracticeMessage {
 const STORAGE_KEY = "ankichat_history";
 const MAX_ENTRIES = 50;
 
+/**
+ * What `localStorage` may actually hold. Entries written before the
+ * vocabulary-source refactor carry a numeric `id` and the Anki model under
+ * `modelName`, so the stored shape is wider than `HistoryEntry`.
+ */
+type StoredVocabularyItem = Omit<VocabularyItem, "id"> & {
+  id: string | number;
+  modelName?: string;
+};
+
+type StoredHistoryEntry = Omit<HistoryEntry, "cards"> & {
+  cards: StoredVocabularyItem[];
+};
+
+function normalizeItem(item: StoredVocabularyItem): VocabularyItem {
+  const ankiModelName = item?.ankiModelName ?? item?.modelName;
+  return {
+    id: String(item?.id ?? ""),
+    word: item?.word ?? "",
+    meaning: item?.meaning ?? "",
+    ...(ankiModelName ? { ankiModelName } : {}),
+  };
+}
+
+function normalizeEntry(entry: StoredHistoryEntry): HistoryEntry {
+  return { ...entry, cards: (entry?.cards ?? []).map(normalizeItem) };
+}
+
+/**
+ * Raw stored entries, un-normalized. Mutators read through this so that
+ * rewriting the list (delete, transcript update) leaves untouched entries
+ * exactly as they were on disk.
+ */
+function readRaw(): StoredHistoryEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export const historyStorage = {
   getAll(): HistoryEntry[] {
-    if (typeof window === "undefined") return [];
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-    } catch {
-      return [];
-    }
+    return readRaw().map(normalizeEntry);
   },
 
   save(entry: Omit<HistoryEntry, "id" | "createdAt">): HistoryEntry {
@@ -37,7 +75,7 @@ export const historyStorage = {
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
     };
-    const all = this.getAll();
+    const all = readRaw();
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify([newEntry, ...all].slice(0, MAX_ENTRIES))
@@ -46,7 +84,7 @@ export const historyStorage = {
   },
 
   updateTranscript(id: string, transcript: PracticeMessage[]) {
-    const all = this.getAll();
+    const all = readRaw();
     const updated = all.map((e) =>
       e.id === id ? { ...e, practiceTranscript: transcript } : e
     );
@@ -54,7 +92,7 @@ export const historyStorage = {
   },
 
   delete(id: string) {
-    const all = this.getAll().filter((e) => e.id !== id);
+    const all = readRaw().filter((e) => e.id !== id);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
   },
 

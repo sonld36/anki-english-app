@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { ParsedCard } from "@/lib/anki";
+import type { VocabularyItem } from "@/lib/vocabulary/types";
 import type { DialogueLevel } from "@/lib/gemini";
 
 export async function POST(req: NextRequest) {
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { cards, context, level } = (await req.json()) as {
-    cards: ParsedCard[];
+    cards: VocabularyItem[];
     context: string;
     level: DialogueLevel;
   };

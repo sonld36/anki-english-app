@@ -1,4 +1,4 @@
-import type { ParsedCard } from "./anki";
+import type { VocabularyItem } from "./vocabulary/types";
 
 export type DialogueLevel = "A2" | "B1" | "B2";
 
@@ -14,7 +14,7 @@ export const CONTEXTS = [
 export type ContextId = (typeof CONTEXTS)[number]["id"];
 
 export async function generateDialogue(
-  cards: ParsedCard[],
+  cards: VocabularyItem[],
   context: ContextId,
   level: DialogueLevel = "B1",
   customContext?: string

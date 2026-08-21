@@ -1,5 +1,11 @@
-// AnkiConnect API types
-export interface AnkiCard {
+import type {
+  VocabularyCollection,
+  VocabularyItem,
+  VocabularySource,
+} from "../types";
+
+// AnkiConnect API types — module-private, none of it leaks past `ankiSource`.
+interface AnkiCard {
   cardId: number;
   fields: Record<string, { value: string; order: number }>;
   modelName: string;
@@ -10,13 +16,6 @@ export interface AnkiCard {
   reps: number;
   lapses: number;
   type: number; // 0=new, 1=learning, 2=review
-}
-
-export interface ParsedCard {
-  id: number;
-  word: string;
-  meaning: string;
-  modelName: string;
 }
 
 // Call Next.js API proxy for AnkiConnect (avoids CORS)
@@ -34,7 +33,7 @@ async function callAnki(action: string, params?: object): Promise<unknown> {
   return data.result;
 }
 
-export const ankiApi = {
+const ankiApi = {
   // Get list of all deck names
   getDeckNames: (): Promise<string[]> =>
     callAnki("deckNames") as Promise<string[]>,
@@ -62,8 +61,8 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-// Parse a raw AnkiCard into a simplified ParsedCard
-export function parseCard(card: AnkiCard): ParsedCard {
+// Parse a raw AnkiCard into a neutral VocabularyItem
+function parseCard(card: AnkiCard): VocabularyItem {
   const fields = card.fields;
 
   // Try common field name patterns
@@ -78,15 +77,15 @@ export function parseCard(card: AnkiCard): ParsedCard {
     ) ?? Object.keys(fields)[1];
 
   return {
-    id: card.cardId,
+    id: String(card.cardId),
     word: stripHtml(fields[frontKey]?.value ?? ""),
     meaning: stripHtml(fields[backKey]?.value ?? ""),
-    modelName: card.modelName,
+    ankiModelName: card.modelName,
   };
 }
 
 // Batch fetch cards from a deck (max 200 at a time)
-export async function fetchDeckCards(deckName: string): Promise<ParsedCard[]> {
+async function fetchDeckCards(deckName: string): Promise<VocabularyItem[]> {
   const cardIds = await ankiApi.findCards(deckName);
   if (cardIds.length === 0) return [];
 
@@ -102,3 +101,25 @@ export async function fetchDeckCards(deckName: string): Promise<ParsedCard[]> {
 
   return batches.map(parseCard).filter((c) => c.word && c.meaning);
 }
+
+export const ankiSource: VocabularySource = {
+  id: "anki",
+  label: "Anki",
+  setupHint: {
+    title: "Hướng dẫn kết nối Anki",
+    steps: [
+      "Mở ứng dụng **Anki** trên máy tính",
+      "Cài addon **AnkiConnect** (code: `2055492159`)",
+      "Restart Anki và thử lại",
+    ],
+  },
+
+  async listCollections(): Promise<VocabularyCollection[]> {
+    const names = await ankiApi.getDeckNames();
+    return names.map((name) => ({ id: name, name }));
+  },
+
+  fetchItems(collectionId: string): Promise<VocabularyItem[]> {
+    return fetchDeckCards(collectionId);
+  },
+};

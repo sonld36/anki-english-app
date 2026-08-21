@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { CONTEXTS, type ContextId, type DialogueLevel } from "@/lib/gemini";
-import type { ParsedCard } from "@/lib/anki";
+import type { VocabularyItem } from "@/lib/vocabulary/types";
 
 interface DialogueGeneratorProps {
-  cards: ParsedCard[];
+  cards: VocabularyItem[];
   onDialogueGenerated: (
     dialogue: string,
     context: ContextId,

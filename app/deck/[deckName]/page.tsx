@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { fetchDeckCards, type ParsedCard } from "@/lib/anki";
+import { getVocabularySource } from "@/lib/vocabulary/source";
+import { type VocabularyItem } from "@/lib/vocabulary/types";
 import { type ContextId, type DialogueLevel } from "@/lib/gemini";
 import FlashcardList from "@/components/FlashcardList";
 import DialogueGenerator from "@/components/DialogueGenerator";
@@ -14,14 +15,14 @@ export default function DeckPage() {
   const router = useRouter();
   const deckName = decodeURIComponent(params.deckName as string);
 
-  const [cards, setCards] = useState<ParsedCard[]>([]);
+  const [cards, setCards] = useState<VocabularyItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [dialogue, setDialogue] = useState<string | null>(null);
   const [dialogueContext, setDialogueContext] = useState<ContextId>("cafe");
   const [dialogueLevel, setDialogueLevel] = useState<DialogueLevel>("B1");
-  const [usedCards, setUsedCards] = useState<ParsedCard[]>([]);
+  const [usedCards, setUsedCards] = useState<VocabularyItem[]>([]);
 
   useEffect(() => {
     loadCards();
@@ -31,7 +32,7 @@ export default function DeckPage() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const fetched = await fetchDeckCards(deckName);
+      const fetched = await getVocabularySource().fetchItems(deckName);
       setCards(fetched);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load cards");
