@@ -119,7 +119,7 @@ describe("POST /api/tts — configuration", () => {
 });
 
 describe("POST /api/tts — synthesis", () => {
-  it("returns the audio bytes and asks Azure for the compact MP3 format", async () => {
+  it("returns the audio bytes and asks Azure for the high-bitrate MP3 format", async () => {
     const fetchMock = stubAzure({ kind: "audio", bytes: [0xff, 0xfb, 0x90] });
 
     const res = await POST(request());
@@ -130,7 +130,7 @@ describe("POST /api/tts — synthesis", () => {
       new Uint8Array([0xff, 0xfb, 0x90])
     );
     expect(sentHeaders(fetchMock)["X-Microsoft-OutputFormat"]).toBe(
-      "audio-24khz-48kbitrate-mono-mp3"
+      "audio-24khz-160kbitrate-mono-mp3"
     );
     expect(sentUrl(fetchMock)).toBe(
       "https://southeastasia.tts.speech.microsoft.com/cognitiveservices/v1"

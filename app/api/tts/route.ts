@@ -15,9 +15,23 @@ import { ALLOWED_VOICES } from "@/lib/dialogue/types";
  * `*.tts.speech.microsoft.com` here, `*.stt.…` there.
  */
 
-/** Output format. MP3 at 24 kHz / 48 kbps: small enough to keep a whole
- *  script's audio in IndexedDB, good enough to hear a final consonant. */
-const OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+/**
+ * Output format. MP3 at 24 kHz / 160 kbps.
+ *
+ * 48 kbps was the earlier choice, to keep a whole script's audio small in
+ * IndexedDB. It bought roughly 70 KB a line and cost the thing the feature
+ * exists for: at that bitrate the coder smears the fricatives, so `s`, `sh`
+ * and `th` — the consonants a Vietnamese learner most needs to hear landing —
+ * arrive as the same metallic hiss, and the whole voice reads as robotic.
+ *
+ * Nothing is saved by staying low. Azure bills per *character*, never per
+ * byte, so this is free; a 12-turn script is ~1.2 MB against an IndexedDB
+ * quota measured in hundreds of megabytes. It is also not a cache-breaking
+ * change: the content key is `sha256(voice + " " + text)`, which the format
+ * does not enter, so stored blobs stay addressable and only lines that were
+ * never synthesised come back at the higher bitrate.
+ */
+const OUTPUT_FORMAT = "audio-24khz-160kbitrate-mono-mp3";
 
 /**
  * Longest line we will synthesise.
