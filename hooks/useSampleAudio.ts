@@ -83,6 +83,17 @@ export interface UseSampleAudio {
    *  currently sounding. No network call, ever. */
   play(turnIndex: number): void;
   /**
+   * Silence whatever is sounding, and cancel anything about to.
+   *
+   * `play(playingTurn)` is *not* a substitute. `play` sets `playingTurn` only
+   * after an async IndexedDB read, so a line tapped a beat earlier is still
+   * `null` when the caller wants silence — the toggle then no-ops and the audio
+   * starts a tick later anyway. That is how a native reading of the learner's
+   * own line used to bleed into the start of their recording. This bumps the
+   * play token, so a pending read is superseded and never reaches `audio.play`.
+   */
+  stop(): void;
+  /**
    * The one Vietnamese notice, or `null`. Set at most once per script: whether
    * the disk is full or Azure is unreachable, it will not have changed by the
    * next line.
@@ -232,6 +243,15 @@ export function useSampleAudio(script: DialogueScript | null): UseSampleAudio {
   // Release the last object URL when the component goes away.
   useEffect(() => stopAudio, [stopAudio]);
 
+  const stop = useCallback(() => {
+    // `stopAudio` bumps `playToken`, which is what cancels a play still waiting
+    // on its blob read — the whole point of having a real `stop()`.
+    stopAudio();
+    setState((prev) =>
+      prev.playingTurn === null ? prev : { ...prev, playingTurn: null }
+    );
+  }, [stopAudio]);
+
   const play = useCallback(
     (turnIndex: number) => {
       const map = keyMap.current;
@@ -302,6 +322,7 @@ export function useSampleAudio(script: DialogueScript | null): UseSampleAudio {
     statuses: active.statuses,
     playingTurn: active.playingTurn,
     play,
+    stop,
     notice: active.notice,
   };
 }

@@ -11,9 +11,19 @@
 // **no projection here ever carries a learner turn's text**. That is a rule a
 // test can hold; eyeballing a screen is not.
 //
+// Story 2.2 narrows that rule rather than breaking it. The learner's line is
+// still never *shown*, in any state; what changes is that once a take of it
+// exists, the learner may *hear* the native reading of it beside their own —
+// which is the whole point of recording. That unlock is a **second, distinct
+// projection** (`sampleReplayUnlocked`), so `audioTurnToPlay` keeps returning
+// `null` unconditionally for learner turns and the existing leak tests keep
+// meaning exactly what they say.
+//
 // Nothing here is persisted. Story 2.3 brings the first metrics worth a storage
 // layer and can pick the shape then; an in-memory session that survives
-// "Kết thúc buổi" but not a reload is exactly what Story 2.1 promises.
+// "Kết thúc buổi" but not a reload is exactly what Story 2.1 promises. Takes
+// are the same: they live in the `recordings` blob namespace for the length of
+// one session and are dropped when it ends or restarts.
 
 import type {
   DialogueScript,
@@ -43,11 +53,43 @@ export function findEntry(
 /** `idle` = waiting for the start gesture; `finished` = nothing left to say. */
 export type SessionStatus = "idle" | "running" | "finished";
 
+/**
+ * Where the turn on screen is in the record-and-listen loop.
+ *
+ * This is what makes the mic stop meaning "next". In Story 2.1 one tap both
+ * ended the turn and advanced it; a take has to be *listened to*, so the turn
+ * has to survive the tap. `recorded` is the state that did not exist before:
+ * the turn is still on screen, the take is playable, and only "Tiếp" moves on.
+ *
+ * It also leaves room for Story 2.3's score card and Story 2.5's retry to
+ * attach without moving the control row.
+ */
+export type TurnPhase = "idle" | "recording" | "recorded";
+
+/**
+ * A take of one turn, as everything outside the recorder needs to know it.
+ *
+ * `key` addresses the blob in the `recordings` namespace — positional, never a
+ * content hash (see `lib/recording.ts`). `peak` rides along so the low-signal
+ * warning is derived where it is rendered instead of being remembered as one
+ * more piece of transient state.
+ */
+export interface TurnTake {
+  key: string;
+  /** Length of the *trimmed* take. */
+  durationMs: number;
+  /** Peak amplitude 0..1 of the trimmed take. */
+  peak: number;
+}
+
 /** One turn the learner actually got through, with how long it was on screen. */
 export interface CompletedTurn {
   index: number;
   speaker: Speaker;
   elapsedMs: number;
+  /** The take that ended this turn, or `null` — a system turn, or a learner
+   *  turn the mic could not serve. */
+  take: TurnTake | null;
 }
 
 export interface SessionState {
@@ -60,10 +102,53 @@ export interface SessionState {
   /** When the current turn went on screen, ms epoch. `null` unless `running`. */
   turnStartedAt: number | null;
   completed: CompletedTurn[];
+  /** The record-and-listen phase of the turn on screen. */
+  phase: TurnPhase;
+  /** When capture started, ms epoch. `null` unless `phase === "recording"`. */
+  recordingStartedAt: number | null;
+  /**
+   * Takes by turn index. Kept for the whole session, not just the current
+   * turn: an earlier turn scrolled back to must still be replayable.
+   */
+  takes: Record<number, TurnTake>;
+  /**
+   * The microphone is unusable for the rest of this session — permission
+   * denied, no device, or the capture graph failed to build.
+   *
+   * Sticky on purpose, and set **only** by a failure that trying again cannot
+   * fix — a denial, or no device at all (`isPermanentCaptureFailure`).
+   * EXPERIENCE.md forbids asking a second time after a denial. A busy
+   * microphone or a one-off worklet hiccup must stay retryable: killing the mic
+   * for the whole session over a transient fault is a permanent punishment for
+   * a temporary problem.
+   */
+  micBlocked: boolean;
+  /**
+   * Something outside the learner's control has stopped this session producing
+   * a take — the mic is blocked, the disk is full, the write failed, the
+   * capture graph delivered no signal.
+   *
+   * It exists so the **exit** can open without the *mic* going inert. Without
+   * it a full quota dead-ends the session completely: every retry fails
+   * identically, no take ever appears, "Tiếp" never opens, and the only way out
+   * is "Kết thúc buổi" — while the notice cheerfully promises "buổi luyện vẫn
+   * đi tiếp bình thường".
+   */
+  takeBlocked: boolean;
 }
 
 export function createSession(): SessionState {
-  return { status: "idle", cursor: 0, turnStartedAt: null, completed: [] };
+  return {
+    status: "idle",
+    cursor: 0,
+    turnStartedAt: null,
+    completed: [],
+    phase: "idle",
+    recordingStartedAt: null,
+    takes: {},
+    micBlocked: false,
+    takeBlocked: false,
+  };
 }
 
 /**
@@ -95,12 +180,106 @@ function turnCount(script: DialogueScript | null | undefined): number {
  */
 export function startSession(
   script: DialogueScript | null | undefined,
-  at: number
+  at: number,
+  previous?: SessionState
 ): SessionState {
+  // A restart is a new session in every respect but one: a microphone the
+  // browser has already refused will refuse again, and asking a second time is
+  // exactly what EXPERIENCE.md rules out. `takes` is *not* carried over —
+  // the blobs are dropped at the same moment (see `hooks/useTurnRecorder.ts`),
+  // and a take control pointing at a deleted blob promises audio that is gone.
+  const base = {
+    ...createSession(),
+    micBlocked: previous?.micBlocked ?? false,
+    // `takeBlocked` is deliberately *not* carried: a fresh session should not
+    // open its exit before the learner has tried anything. A mic that is still
+    // blocked re-opens it on the first turn anyway, via `canContinue`.
+    takeBlocked: false,
+  };
   if (turnCount(script) === 0) {
-    return { status: "finished", cursor: 0, turnStartedAt: null, completed: [] };
+    return { ...base, status: "finished" };
   }
-  return { status: "running", cursor: 0, turnStartedAt: at, completed: [] };
+  return { ...base, status: "running", cursor: 0, turnStartedAt: at };
+}
+
+// ---------------------------------------------------------------------------
+// Recording transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Capture has begun on the turn on screen.
+ *
+ * The turn's existing take is dropped here rather than on the take that
+ * replaces it: re-recording must not leave the previous take playable while
+ * the new one is being spoken, and there is deliberately **no attempt counter**
+ * — that is Story 2.5's, and inventing one here would prejudge it.
+ */
+export function startRecording(state: SessionState, at: number): SessionState {
+  if (state.status !== "running") return state;
+  const takes = { ...state.takes };
+  delete takes[state.cursor];
+  return { ...state, phase: "recording", recordingStartedAt: at, takes };
+}
+
+/**
+ * Capture stopped and produced a take. The turn stays on screen: only "Tiếp"
+ * moves the session on from here.
+ */
+export function finishRecording(
+  state: SessionState,
+  take: TurnTake
+): SessionState {
+  if (state.phase !== "recording") return state;
+  return {
+    ...state,
+    phase: "recorded",
+    recordingStartedAt: null,
+    takes: { ...state.takes, [state.cursor]: take },
+  };
+}
+
+/**
+ * Capture stopped with nothing to keep — a silence-only take, or a write that
+ * failed. Back to `idle`, which is to say: the mic is offered again and the
+ * turn has not moved.
+ */
+export function cancelRecording(state: SessionState): SessionState {
+  if (state.phase !== "recording") return state;
+  return { ...state, phase: "idle", recordingStartedAt: null };
+}
+
+/**
+ * The microphone is not going to work this session — a denial, or no device.
+ * Said once, then the mic goes inert and "Tiếp" carries the session.
+ *
+ * A blocked mic implies a blocked take, so this opens the exit too.
+ */
+export function blockMic(state: SessionState): SessionState {
+  return {
+    ...state,
+    micBlocked: true,
+    takeBlocked: true,
+    phase: state.phase === "recording" ? "idle" : state.phase,
+    recordingStartedAt: null,
+  };
+}
+
+/**
+ * This turn could not produce a take, through no fault of the learner: a full
+ * disk, a failed write, a capture graph that delivered no signal, or a
+ * transient capture failure.
+ *
+ * Opens the exit **without** touching the mic — unlike `blockMic`, every one of
+ * these is worth another try, so the button stays live and "Tiếp" simply stops
+ * being unreachable.
+ */
+export function blockTake(state: SessionState): SessionState {
+  return {
+    ...state,
+    takeBlocked: true,
+    phase: state.phase === "recording" ? "idle" : state.phase,
+    recordingStartedAt: null,
+  };
 }
 
 /**
@@ -113,6 +292,9 @@ export function completeCurrentTurn(
   at: number
 ): SessionState {
   if (state.status !== "running") return state;
+  // Mid-capture the turn is not over — the mic no longer means "next", and a
+  // stray advance here would silently throw away the take being spoken.
+  if (state.phase === "recording") return state;
 
   const turn = script?.turns[state.cursor];
   // The cursor is somehow off the end of the script: finish rather than
@@ -125,16 +307,23 @@ export function completeCurrentTurn(
       index: turn.index,
       speaker: turn.speaker,
       elapsedMs: Math.max(0, at - (state.turnStartedAt ?? at)),
+      take: state.takes[turn.index] ?? null,
     },
   ];
 
   const next = state.cursor + 1;
   const done = next >= turnCount(script);
   return {
+    ...state,
     status: done ? "finished" : "running",
     cursor: next,
     turnStartedAt: done ? null : at,
     completed,
+    // The next turn starts fresh; earlier takes stay replayable.
+    phase: "idle",
+    recordingStartedAt: null,
+    // Finishing here drops the takes for the same reason `endSession` does.
+    takes: done ? {} : state.takes,
   };
 }
 
@@ -147,7 +336,18 @@ export function completeCurrentTurn(
  */
 export function endSession(state: SessionState): SessionState {
   if (state.status === "finished") return state;
-  return { ...state, status: "finished", turnStartedAt: null };
+  return {
+    ...state,
+    status: "finished",
+    turnStartedAt: null,
+    phase: "idle",
+    recordingStartedAt: null,
+    // The blobs go with the session (`hooks/useTurnRecorder.ts` drops the
+    // `recordings` namespace), so the projections must stop offering them.
+    // `CompletedTurn.take` keeps the record of what happened; `takes` is what
+    // is still *playable*, and after this nothing is.
+    takes: {},
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -171,15 +371,27 @@ export interface TurnView {
   text: string | null;
   /** Target words to highlight in `text`. Always empty for a learner turn. */
   targetWords: string[];
+  /**
+   * The learner's own take of this turn, if one exists and is still playable.
+   *
+   * A reference, never audio and never text: `TurnTake.key` addresses a blob
+   * and carries no part of the line. This is what gives a completed turn its
+   * replay control when it is scrolled back to.
+   */
+  take: TurnTake | null;
 }
 
-export function turnView(turn: DialogueTurn): TurnView {
+export function turnView(
+  turn: DialogueTurn,
+  take: TurnTake | null = null
+): TurnView {
   const isSystem = turn.speaker === "system";
   return {
     index: turn.index,
     speaker: turn.speaker,
     text: isSystem ? turn.text : null,
     targetWords: isSystem ? [...turn.targetWords] : [],
+    take,
   };
 }
 
@@ -196,7 +408,9 @@ export function visibleTurnViews(
     state.status === "running"
       ? Math.min(state.cursor + 1, script.turns.length)
       : Math.min(state.cursor, script.turns.length);
-  return script.turns.slice(0, end).map(turnView);
+  return script.turns
+    .slice(0, end)
+    .map((turn) => turnView(turn, state.takes[turn.index] ?? null));
 }
 
 /** Index of the turn on screen, or `null` when nothing is. */
@@ -223,6 +437,135 @@ export function micEnabled(
   const index = currentTurnIndex(script, state);
   if (index === null) return false;
   return script?.turns[index]?.speaker === "learner";
+}
+
+/**
+ * What the mic button *means* right now.
+ *
+ * Decided here rather than in the screen because it is three different
+ * controls wearing one circle: a glyph, an accessible name and a glow all hang
+ * off it, and "tap to start, tap again to stop — never press-and-hold" is a
+ * frozen constraint that a `mousedown` handler could quietly break.
+ *
+ * `disabled` still carries its Story 2.1 meaning: DESIGN.md makes it the only
+ * "chưa tới lượt bạn" indicator, so it must stay reachable from one predicate.
+ */
+export type MicAction = "record" | "stop" | "disabled";
+
+export function micAction(
+  script: DialogueScript | null | undefined,
+  state: SessionState
+): MicAction {
+  if (state.status !== "running") return "disabled";
+  // Stopping wins over everything: whatever else changed, a live capture must
+  // always have a way to end.
+  if (state.phase === "recording") return "stop";
+  if (!micEnabled(script, state)) return "disabled";
+  if (state.micBlocked) return "disabled";
+  // `recorded` lands here too — tapping again re-records, replacing the take.
+  return "record";
+}
+
+/**
+ * May the learner leave this turn?
+ *
+ * The turn no longer ends when the mic stops, so something has to say when
+ * "Tiếp" appears. Two ways in, and the second is the one the matrix insists
+ * on: a take exists, **or** nothing outside the learner's control will let one
+ * exist. A denied permission, a full disk and a silent capture graph must all
+ * stop short of stranding the session on a control that will never work.
+ *
+ * Never mid-capture: `completeCurrentTurn` refuses it anyway, and offering a
+ * button that does nothing is worse than not offering it.
+ */
+export function canContinue(
+  script: DialogueScript | null | undefined,
+  state: SessionState
+): boolean {
+  if (state.status !== "running") return false;
+  const index = currentTurnIndex(script, state);
+  if (index === null) return false;
+  if (script?.turns[index]?.speaker !== "learner") return false;
+  if (state.phase === "recording") return false;
+  return state.phase === "recorded" || state.micBlocked || state.takeBlocked;
+}
+
+/**
+ * The native reading of a turn may be replayed on demand — but for a learner
+ * turn, only once a take of it exists.
+ *
+ * **This is the narrowed reveal rule, and it is deliberately a second,
+ * distinct projection from `audioTurnToPlay`.** Story 2.1's invariant was "the
+ * learner's line never reaches the speaker"; this story's whole point is
+ * hearing yourself against the model, so the rule becomes: never before a take
+ * exists, always after. Keeping it separate means the autoplay path still
+ * returns `null` for every learner turn unconditionally, and the leak tests
+ * that guard it keep meaning exactly what they say.
+ *
+ * The line's *text* is still never rendered, in any state. Only the audio
+ * unlocks.
+ */
+export function sampleReplayUnlocked(
+  script: DialogueScript | null | undefined,
+  state: SessionState,
+  turnIndex: number,
+  status: SampleAudioStatus
+): boolean {
+  const turn = script?.turns[turnIndex];
+  if (!turn) return false;
+  // Nothing to play: generation failed, or never reached this line.
+  if (status !== "ready") return false;
+  if (turn.speaker === "system") return true;
+  return state.takes[turnIndex] !== undefined;
+}
+
+/**
+ * May this turn's take be played back?
+ *
+ * **The take channel's half of "nothing may sound into a live microphone."**
+ * `shouldStopPlayback` governs the native-sample channel; take playback runs on
+ * its own `<audio>` element in `hooks/useTurnRecorder.ts` and would otherwise
+ * consult nothing. Without the `recording` gate, an earlier turn's take played
+ * for its full length straight into an open mic — the learner's own voice
+ * recorded over their next attempt.
+ *
+ * Gating the *control* rather than the playback is deliberate: a button that
+ * cannot be pressed during capture is simpler and more honest than one that
+ * starts audio and has it cut off a tick later.
+ */
+export function takeReplayUnlocked(
+  state: SessionState,
+  turnIndex: number
+): boolean {
+  if (state.phase === "recording") return false;
+  return state.takes[turnIndex] !== undefined;
+}
+
+/** What the count-up clock is measuring. */
+export type ClockMode = "turn" | "recording";
+
+export interface ClockBasis {
+  mode: ClockMode;
+  /** Epoch ms the clock counts from, or `null` when it is not running. */
+  startedAt: number | null;
+}
+
+/**
+ * The clock's basis.
+ *
+ * While capture is live it counts the *take*, not the turn: that is the number
+ * the learner is actually watching, and it is the one Story 2.3 caps at 30s.
+ * It stays a count-up either way — DESIGN.md is explicit that it is a measure,
+ * not an ultimatum, so nothing happens at any mark.
+ */
+export function clockBasis(state: SessionState): ClockBasis {
+  if (state.phase === "recording" && state.recordingStartedAt !== null) {
+    return { mode: "recording", startedAt: state.recordingStartedAt };
+  }
+  return {
+    mode: "turn",
+    startedAt: state.status === "running" ? state.turnStartedAt : null,
+  };
 }
 
 export interface SessionSummary {
@@ -391,6 +734,8 @@ export interface AdvanceDelayInput {
   fallbackMs: number | null;
   /** How long the turn has already been on screen. */
   elapsedMs: number;
+  /** Capture is live on this turn. */
+  isRecording?: boolean;
 }
 
 /**
@@ -406,8 +751,13 @@ export interface AdvanceDelayInput {
  * - **a line that is sounding** is left alone: no estimate may cut a line off
  *   mid-word. The caller re-runs this the instant playback stops, and that is
  *   when the turn gets its delay.
+ * - **capture is live.** Redundant today — only learner turns can be recorded
+ *   and they already have `fallbackMs: null` — and stated anyway, because "no
+ *   timer may cut a recording short" is a rule about recording, not a
+ *   side effect of where recording happens to be allowed.
  */
 export function advanceDelayMs(input: AdvanceDelayInput): number | null {
+  if (input.isRecording) return null;
   if (input.fallbackMs === null) return null;
   if (input.isSounding) return null;
 
@@ -434,12 +784,39 @@ export function advanceDelayMs(input: AdvanceDelayInput): number | null {
  * `playingTurn` and silencing anything stale covers that, ending the session
  * mid-line, and advancing off a system turn onto the learner's.
  */
+export interface PlaybackContext {
+  /**
+   * The turn whose sample the learner has *deliberately* asked to hear again.
+   *
+   * Without this the reaper below would silence every replay the instant it
+   * started: a scrolled-back turn is by definition not the turn on screen,
+   * which is precisely the condition the reaper exists to catch. A learner turn
+   * is the only thing this can point at (system turns replay as part of their
+   * own turn), and `audioTurnToPlay` never returns a learner turn, so a
+   * deliberate replay can never be confused with a stale autoplay.
+   *
+   * The `status !== "running"` case below is defensive rather than live: takes
+   * and their unlocked samples are cleared when a session ends, so no replay
+   * control survives into the finished state today.
+   */
+  replayTurn?: number | null;
+  /** The record-and-listen phase of the turn on screen. */
+  phase?: TurnPhase;
+}
+
 export function shouldStopPlayback(
   playingTurn: number | null,
   currentTurn: number | null,
-  status: SessionStatus
+  status: SessionStatus,
+  context: PlaybackContext = {}
 ): boolean {
   if (playingTurn === null) return false;
+  // Nothing may be sounding into a live microphone — the take would carry the
+  // native voice reading the very line the learner is being asked to produce.
+  if (context.phase === "recording") return true;
+  if (context.replayTurn != null && playingTurn === context.replayTurn) {
+    return false;
+  }
   if (status !== "running") return true;
   return playingTurn !== currentTurn;
 }

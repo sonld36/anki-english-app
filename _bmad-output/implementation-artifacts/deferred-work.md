@@ -101,3 +101,15 @@ Pre-existing issues surfaced incidentally by reviews. Not caused by the story th
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-dien-kich-ban-theo-luot-trong-khung-chat.md`
   summary: The ✕ delete button in `components/HistoryPanel.tsx` deletes an entry and simultaneously navigates to `/practice?id=` for the entry it just removed, when activated with the keyboard.
   evidence: The card is `role="button" tabIndex={0}` with `onKeyDown={(e) => e.key === "Enter" && handleViewEntry(entry)}` (components/HistoryPanel.tsx:176-178). `handleDelete` calls `stopPropagation()` on the MouseEvent only (`:23-24`, wired at `:204`), so Enter on the focused ✕ fires the button's synthesized click *and* bubbles the keydown to the card. Pre-existing — not introduced by Story 2.1, which hit the identical hole on its own new button and fixed it there (`:270`). Same one-line `onKeyDown={(e) => e.stopPropagation()}`.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-ghi-am-luot-cua-minh-va-nghe-lai-canh-giong-mau.md`
+  summary: NFR-10's privacy disclosure — telling the learner their voice leaves the device for scoring — must land in Story 2.3, which is where audio first leaves the device.
+  evidence: PRD §8.2 / NFR-10 require it, but no planning document says what to show or when, and Story 2.2 uploads nothing, so there was no honest moment to show it. Deferred at the human's direction during planning.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-ghi-am-luot-cua-minh-va-nghe-lai-canh-giong-mau.md`
+  summary: Nothing caps the length of a single take — PCM chunks accumulate unbounded in memory and the resulting WAV can exhaust the IndexedDB quota.
+  evidence: Review finding. The epic assigns the 30-second clip cap to Story 2.3 as a scoring-cost constraint, so it was out of scope here, but the memory-growth half of the problem is Story 2.2's and is currently unbounded.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-2-ghi-am-luot-cua-minh-va-nghe-lai-canh-giong-mau.md`
+  summary: `replayTurn` in SessionView is cleared only by `stopPlayback`, never when playback ends on its own, so the reaper's exemption for that turn index stays armed indefinitely.
+  evidence: Review finding. Harmless today because `audioTurnToPlay` can never yield a learner index, but Story 2.5's sanctioned reveal will play a learner line and would inherit a stale exemption.

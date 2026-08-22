@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { encodeWav, peakLevel } from "@/lib/wav";
+import { encodeWav, isPeakTooLow, peakLevel } from "@/lib/wav";
 
 /**
  * Pronunciation assessment lab — a throwaway harness for validating three
@@ -231,7 +231,7 @@ export default function PronunciationLabPage() {
     setAudioInfo(
       `${seconds.toFixed(2)}s · ${(blob.size / 1024).toFixed(0)} KB · ` +
         `đỉnh ${(peak * 100).toFixed(0)}%` +
-        (peak < 0.05 ? " ⚠️ quá nhỏ, có thể sai mic" : "")
+        (isPeakTooLow(peak) ? " ⚠️ quá nhỏ, có thể sai mic" : "")
     );
     recordingIdRef.current += 1;
   }, [audioUrl]);

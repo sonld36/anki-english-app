@@ -372,10 +372,22 @@ select.input {
    as they did. */
 .session-screen {
   color-scheme: dark;
+
+  /* The recording glow, as literal alpha values of --chrome in each mode.
+     Declared on the screen rather than in the token layer above, which stays
+     exactly the 11 semantic colours DESIGN.md names — and deliberately not
+     color-mix(), which lightningcss rewrites to an opaque fallback outside
+     @keyframes and turns the glow into a hard ring. */
+  --glow-record: rgba(34, 197, 94, 0.45);
+  --glow-record-soft: rgba(34, 197, 94, 0.24);
+  --glow-record-faint: rgba(34, 197, 94, 0.12);
 }
 
 :root[data-theme="light"] .session-screen {
   color-scheme: light;
+  --glow-record: rgba(78, 115, 85, 0.45);
+  --glow-record-soft: rgba(78, 115, 85, 0.24);
+  --glow-record-faint: rgba(78, 115, 85, 0.12);
 }
 
 /* The session screen owns the whole viewport: the chat scrolls inside it and
@@ -388,6 +400,162 @@ body:has(.session-screen) {
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
+}
+
+/* The recording glow — DESIGN.md's *one* sanctioned exception to "layer with
+   background colour, never with shadow". It is the only place in the app that
+   needs to pull the eye, and it is deliberately green (`--chrome`), not a
+   danger colour: recording is the thing the learner is here to do.
+
+   It is never the only signal either — the glyph, the accessible name and
+   `aria-pressed` all change with it. `prefers-reduced-motion` drops the pulse
+   and keeps the ring, so the state stays unmistakable without anything moving. */
+.session-screen .session-mic--recording {
+  animation: session-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes session-mic-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 4px var(--glow-record-soft),
+      0 0 18px 4px var(--glow-record);
+  }
+  50% {
+    box-shadow:
+      0 0 0 9px var(--glow-record-faint),
+      0 0 26px 9px var(--glow-record-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-screen .session-mic--recording {
+    animation: none;
+    box-shadow:
+      0 0 0 4px var(--glow-record-soft),
+      0 0 18px 4px var(--glow-record);
+  }
+}
+
+/* Replay controls: the learner's own take and the native sample, side by side.
+   `meta` type per DESIGN.md's chip spec.
+
+   The radius is `--radius-lg`, not `--radius-full`: this token layer defines
+   `full: 50%`, which is a *circle* (it is what the 52px mic uses) and would
+   render a wide, short chip as an ellipse. 16px on a ~26px-tall control reads
+   as the intended pill while staying on the token set — no hardcoded value. */
+.session-screen .session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.session-screen .session-chip:hover {
+  color: var(--ink-primary);
+  border-color: var(--chrome);
+}
+
+/* Keyboard parity with :hover. Without it the only feedback a keyboard user
+   gets is the UA default outline, which the dark surface swallows. */
+.session-screen .session-chip:focus-visible,
+.session-screen .session-mic:focus-visible,
+.session-screen .session-notice-dismiss:focus-visible {
+  outline: 2px solid var(--chrome);
+  outline-offset: 2px;
+  color: var(--ink-primary);
+}
+
+/* The warning tier from DESIGN.md's accessibility table: `!` plus a dashed
+   border, so the state survives greyscale and a screen reader alike. Never
+   colour alone. Scoped, like everything else this screen adds. */
+.session-screen .session-note {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+}
+
+/* One modifier per `RecordingNotice.tone`. All three exist because the field
+   does: shipping only `--warning` would render every notice as a warning and
+   make `tone` inert — a value carried through three modules and honoured
+   nowhere. */
+.session-screen .session-note--info {
+  color: var(--ink-muted);
+  border: 1px solid var(--border-hairline);
+}
+
+.session-screen .session-note--warning {
+  color: var(--warning);
+  border: 1px dashed var(--warning);
+}
+
+.session-screen .session-note--danger {
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+/* The full-width notice strip carries the same dashed cue on one edge — a box
+   around a strip that already spans the screen reads as a stray rectangle. */
+.session-screen .session-notice-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--surface-sunken);
+  flex-shrink: 0;
+}
+
+.session-screen .session-notice-bar--info {
+  color: var(--ink-secondary);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.session-screen .session-notice-bar--warning {
+  color: var(--warning);
+  border-bottom: 1px dashed var(--warning);
+}
+
+.session-screen .session-notice-bar--danger {
+  color: var(--danger);
+  border-bottom: 1px solid var(--danger);
+}
+
+/* 44px of tappable area around a 12px glyph — the target has to be reachable
+   with a thumb on the screen this is designed for, not merely present. */
+.session-screen .session-notice-dismiss {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  padding: var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.session-screen .session-notice-dismiss:hover {
+  color: var(--ink-primary);
 }
 
 /* ============================
