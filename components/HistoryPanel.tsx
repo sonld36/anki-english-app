@@ -30,6 +30,15 @@ export default function HistoryPanel() {
     router.push(`/practice?id=${entry.id}`);
   }
 
+  /**
+   * The turn-by-turn session screen (Story 2.1). Additive: the card's own
+   * click still opens the old `/practice` path, which stays exactly as it was
+   * until Story 2.8 retires it.
+   */
+  function handleStartSession(entry: HistoryEntry) {
+    router.push(`/session?id=${entry.id}`);
+  }
+
   return (
     <>
       {/* Toggle button */}
@@ -239,11 +248,37 @@ export default function HistoryPanel() {
                           )}
                         </div>
 
-                        {entry.practiceTranscript && entry.practiceTranscript.length > 0 && (
-                          <span className="badge badge-green" style={{ alignSelf: "flex-start" }}>
-                            ✓ Đã luyện tập
-                          </span>
-                        )}
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            flexWrap: "wrap",
+                            marginTop: "2px",
+                          }}
+                        >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartSession(entry);
+                            }}
+                            // The card around this button is a `role="button"`
+                            // with its own `onKeyDown` → `/practice`. Stopping
+                            // only the click left Enter firing *both* routes:
+                            // the keydown bubbled up to the card while the
+                            // button's own native click opened the session.
+                            onKeyDown={(e) => e.stopPropagation()}
+                            className="btn-secondary"
+                            style={{ padding: "4px 10px", fontSize: "0.72rem" }}
+                            title="Diễn kịch bản theo từng lượt"
+                          >
+                            🎯 Buổi luyện
+                          </button>
+
+                          {entry.practiceTranscript && entry.practiceTranscript.length > 0 && (
+                            <span className="badge badge-green">✓ Đã luyện tập</span>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

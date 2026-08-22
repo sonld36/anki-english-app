@@ -22,6 +22,78 @@
   --highlight-bg: rgba(251, 191, 36, 0.15);
 }
 
+/* ============================
+   DESIGN TOKENS (Phòng tập phản xạ)
+   ============================
+   Additive, on purpose. The 18 variables above are still what nine existing
+   files paint with; DESIGN.md retires that purple/blue palette, but doing the
+   repaint inside a feature story would touch every screen at once. These
+   tokens are declared *beside* the old ones so the new session screen has a
+   clean surface while everything else renders exactly as it did.
+
+   The new dark base (#0a120d) is as dark as the old --bg-primary (#0a0a14), so
+   the two layers sit together without a visible seam.
+
+   Dark is the base and lives on :root; the light values live behind
+   [data-theme="light"]. There is no toggle in this story and deliberately no
+   prefers-color-scheme — DESIGN.md rejects following the OS. The switch exists
+   so a later story flips it instead of inventing it.
+
+   `color-scheme` is deliberately NOT declared here. On :root it is app-wide,
+   and it repaints native scrollbars and form controls — the <select> in
+   DeckSelector, the range input in DialogueGenerator, the checkbox in the
+   pronunciation lab — on all nine legacy screens. Those screens must render
+   exactly as they did, so it is scoped to `.session-screen` below instead. */
+:root {
+  /* The 11 semantic colours. Layering is done with these, not with shadows. */
+  --surface-base: #0a120d;
+  --surface-raised: #122018;
+  --surface-sunken: #0d1a12;
+  --ink-primary: #e6f5ea;
+  --ink-secondary: #9db8a8;
+  --ink-muted: #7d9a89;
+  --chrome: #22c55e;
+  --success: #4ade80;
+  --danger: #fb7185;
+  --warning: #fbbf24;
+  --border-hairline: #1d3527;
+
+  /* One family for everything; English sentences differ by size and weight,
+     never by typeface. --font-phonetic exists because the Google-Fonts Inter
+     subset is latin + latin-ext only, so IPA (θ ð ʃ ɪ ə) falls back — this
+     makes that fallback deliberate rather than accidental. */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-phonetic: 'Inter', 'Charis SIL', 'Segoe UI', 'Noto Sans', sans-serif;
+
+  /* 4px scale. Nothing off the scale. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 50%;
+}
+
+/* Only the 11 colours change between modes; type, spacing and radii do not. */
+:root[data-theme="light"] {
+  --surface-base: #f4f8f2;
+  --surface-raised: #ffffff;
+  --surface-sunken: #eaf3e8;
+  --ink-primary: #1a2b20;
+  --ink-secondary: #4e7355;
+  --ink-muted: #586f61;
+  --chrome: #4e7355;
+  --success: #15803d;
+  --danger: #be123c;
+  --warning: #a16207;
+  --border-hairline: #dfe9dc;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -278,6 +350,44 @@ select.input {
   padding: 1px 4px;
   font-weight: 600;
   font-style: normal;
+}
+
+/* Target words inside a session chat bubble, tinted with `chrome` per
+   DESIGN.md. Scoped rather than applied to `.word-highlight` itself:
+   `renderHighlightedHtml` emits that one fixed class, and repainting it would
+   also repaint `DialogueDisplay` — which this story must not do. */
+.session-bubble .word-highlight {
+  color: var(--chrome);
+  background: transparent;
+  padding: 0;
+}
+
+/* ============================
+   SESSION SCREEN (/session)
+   ============================
+   The only two rules the new screen needs that an inline style cannot express.
+
+   `color-scheme` is scoped here rather than on :root: it changes native
+   scrollbars and form controls, and the nine legacy screens must look exactly
+   as they did. */
+.session-screen {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] .session-screen {
+  color-scheme: light;
+}
+
+/* The session screen owns the whole viewport: the chat scrolls inside it and
+   the bottom control row must never scroll away. `body { min-height: 100vh }`
+   above makes the *document* taller than a mobile viewport — 100vh counts the
+   browser toolbar, 100dvh does not — so the row would slide off the bottom on
+   exactly the device this screen is designed for. Only this screen opts out,
+   via :has(), which degrades to today's behaviour where it is unsupported. */
+body:has(.session-screen) {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
 }
 
 /* ============================
