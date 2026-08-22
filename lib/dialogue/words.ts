@@ -26,12 +26,18 @@ export function escapeHtml(text: string): string {
  * Applying it unconditionally makes some targets unmatchable forever — `etc.`
  * and `5%` end in a non-word character, `école` starts with one — and an
  * unmatchable target word is a 422 that no retry can clear.
+ *
+ * Straight (`'`) and typographic (`’`) apostrophes are interchangeable: Anki
+ * sentence targets like `I don't mean to interrupt` must match a model line
+ * written with `don’t` and vice versa, or the target-word violation is a 422
+ * no repair can fix.
  */
 export function wordPattern(word: string): string {
   const needle = word.trim();
   const leading = /^\w/.test(needle) ? "\\b" : "";
   const trailing = /\w$/.test(needle) ? "\\b" : "";
-  return `${leading}${escapeRegExp(needle)}${trailing}`;
+  const body = escapeRegExp(needle).replace(/['’]/g, "['’]");
+  return `${leading}${body}${trailing}`;
 }
 
 /** Whole-word containment: `cold` must not match inside `colder`. */

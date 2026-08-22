@@ -112,6 +112,15 @@ function joinedHints(value: unknown, words: string[] = WORDS): string {
   return hintViolationsOf(value, words).join("\n");
 }
 
+function softViolationsOf(value: unknown, words: string[] = WORDS): string[] {
+  const result = validateScript(value, words);
+  return result.ok ? [] : result.softViolations;
+}
+
+function joinedSoft(value: unknown, words: string[] = WORDS): string {
+  return softViolationsOf(value, words).join("\n");
+}
+
 describe("validateScript — valid script", () => {
   it("accepts a schema-conformant script that meets every rule", () => {
     expect(validateScript(script(validSpecs()), WORDS)).toEqual({ ok: true });
@@ -241,8 +250,8 @@ describe("validateScript — substring trap", () => {
 
 });
 
-describe("validateScript — consonant clash", () => {
-  it("rejects a -ed target word followed by t (walked to)", () => {
+describe("validateScript — consonant clash (soft)", () => {
+  it("reports a -ed target word followed by t (walked to)", () => {
     const specs = validSpecs();
     specs[0] = {
       speaker: "system",
@@ -251,12 +260,12 @@ describe("validateScript — consonant clash", () => {
     };
     specs[1] = { speaker: "learner", text: "That is a long way in this weather.", targetWords: ["weather"] };
 
-    expect(joined(script(specs), ["walked", "weather", "expensive"])).toContain(
+    expect(joinedSoft(script(specs), ["walked", "weather", "expensive"])).toContain(
       'Turn 1 puts "walked to" in the text'
     );
   });
 
-  it("rejects a -d target word followed by d (cold drink)", () => {
+  it("reports a -d target word followed by d (cold drink)", () => {
     const specs = validSpecs();
     specs[0] = {
       speaker: "system",
@@ -264,10 +273,10 @@ describe("validateScript — consonant clash", () => {
       targetWords: ["cold"],
     };
 
-    expect(joined(script(specs))).toContain('Turn 1 puts "cold drink" in the text');
+    expect(joinedSoft(script(specs))).toContain('Turn 1 puts "cold drink" in the text');
   });
 
-  it("rejects a -s target word followed by s", () => {
+  it("reports a -s target word followed by s", () => {
     const specs = validSpecs();
     specs[0] = {
       speaker: "system",
@@ -276,7 +285,7 @@ describe("validateScript — consonant clash", () => {
     };
     specs[3] = { speaker: "learner", text: "Not yet, coats are expensive.", targetWords: ["expensive"] };
 
-    expect(joined(script(specs), ["needs", "weather", "expensive"])).toContain(
+    expect(joinedSoft(script(specs), ["needs", "weather", "expensive"])).toContain(
       'Turn 1 puts "needs some" in the text'
     );
   });
@@ -289,7 +298,27 @@ describe("validateScript — consonant clash", () => {
       targetWords: ["cold"],
     };
 
-    expect(joined(script(specs))).toContain('Turn 1 puts "cold downstairs" in the text');
+    expect(joinedSoft(script(specs))).toContain('Turn 1 puts "cold downstairs" in the text');
+  });
+
+  it("keeps a clash out of the fatal violations and out of the hint violations", () => {
+    // The demotion this fix exists for: `seat`, `sweet`, `quiet` end in t/d/s
+    // and the model repeatedly fails to reword them — a clash may cost the one
+    // repair attempt, never the generation.
+    const specs = validSpecs();
+    specs[0] = {
+      speaker: "system",
+      text: "I would love a cold drink right now.",
+      targetWords: ["cold"],
+    };
+
+    const result = validateScript(script(specs), WORDS);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.violations).toEqual([]);
+    expect(result.hintViolations).toEqual([]);
+    expect(result.softViolations).toHaveLength(1);
+    expect(result.softViolations[0]).toContain('Turn 1 puts "cold drink" in the text');
   });
 
   it("allows the clash consonant when punctuation separates the words", () => {

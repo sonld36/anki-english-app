@@ -68,6 +68,43 @@ function hintOnlyBadTurns(): GeminiTurn[] {
   return turns;
 }
 
+/** Every fatal rule met; only a consonant clash ("cold drink") remains. */
+function clashOnlyTurns(): GeminiTurn[] {
+  const turns = validTurns();
+  turns[0] = {
+    speaker: "system",
+    text: "I would love a cold drink right now.",
+    targetWords: ["cold"],
+  };
+  return turns;
+}
+
+/** Two clash turns: "cold drink" and a second turn claiming "cold day". */
+function twoClashTurns(): GeminiTurn[] {
+  const turns = clashOnlyTurns();
+  turns[2] = {
+    speaker: "system",
+    text: "Yes, this cold day will be hard.",
+    targetWords: ["cold"],
+  };
+  return turns;
+}
+
+/** A consonant clash plus a fatal fault: "weather" never appears. */
+function clashPlusFatalTurns(): GeminiTurn[] {
+  const turns = clashOnlyTurns();
+  turns[1] = {
+    speaker: "learner",
+    text: "I know, it changed really fast.",
+    targetWords: [],
+    hints: {
+      situation: "Khi bạn đồng tình với nhận xét về trời trở lạnh.",
+      keywords: ["changed"],
+    },
+  };
+  return turns;
+}
+
 type Reply =
   | { kind: "script"; turns: GeminiTurn[] }
   | { kind: "text"; text: string }
@@ -375,13 +412,101 @@ describe("POST /api/dialogue — repair attempt", () => {
     expect(
       warn.mock.calls.some(
         (args) =>
-          String(args[0]).includes("accepted with faulty hints") &&
+          String(args[0]).includes("accepted with non-fatal faults") &&
           (args[1] as string[]).join("\n").includes(
             'Turn 2 is a "learner" turn with no `hints`'
           )
       )
     ).toBe(true);
     warn.mockRestore();
+  });
+
+  it("repairs once when only a consonant clash is found, and takes the fix", async () => {
+    stubGemini([
+      { kind: "script", turns: clashOnlyTurns() },
+      { kind: "script", turns: validTurns() },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+    // The repair still hears about the clash, and the base prompt keeps its
+    // pronunciation-constraint line.
+    expect(calls[0].prompt).toContain("Pronunciation constraint");
+    expect(calls[1].prompt).toContain('Turn 1 puts "cold drink" in the text');
+    expect(body.script.turns[0].text).toBe("It is really cold outside today.");
+  });
+
+  it("returns the script with a 200 when only the clash remains after repair", async () => {
+    // The demotion this fix exists for: a clash the model cannot reword must
+    // cost at most the repair attempt, never the generation.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubGemini([{ kind: "script", turns: clashOnlyTurns() }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as {
+      script: DialogueScript;
+      violations?: string[];
+    };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(200);
+    expect(body.violations).toBeUndefined();
+    expect(body.script.turns[0].text).toBe("I would love a cold drink right now.");
+    warn.mockRestore();
+  });
+
+  it("prefers the attempt with fewer soft faults when both are script-clean", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubGemini([
+      { kind: "script", turns: twoClashTurns() },
+      { kind: "script", turns: clashOnlyTurns() },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script: DialogueScript };
+
+    expect(res.status).toBe(200);
+    // The repair still clashes once, but it beats the first attempt's two.
+    expect(body.script.turns[2].text).toBe("Did you bring a warm coat?");
+    warn.mockRestore();
+  });
+
+  it("keeps a soft-only first attempt when the repair call transport-fails", async () => {
+    // Mirror of the hint-fault analog: the first script broke no fatal rule,
+    // so a quota error on the repair must not turn a clash into a 500.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubGemini([
+      { kind: "script", turns: clashOnlyTurns() },
+      { kind: "http", status: 429, message: "Quota exceeded" },
+    ]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { script?: DialogueScript; error?: string };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(200);
+    expect(body.error).toBeUndefined();
+    expect(body.script?.turns[0].text).toBe("I would love a cold drink right now.");
+    warn.mockRestore();
+  });
+
+  it("422s on clash plus fatal fault without soft findings in `violations`", async () => {
+    stubGemini([{ kind: "script", turns: clashPlusFatalTurns() }]);
+
+    const res = await POST(request());
+    const body = (await res.json()) as { error: string; violations: string[] };
+
+    expect(calls).toHaveLength(2);
+    expect(res.status).toBe(422);
+    expect(body.violations.join("\n")).toContain(
+      'The target word "weather" never appears'
+    );
+    // The 422 body stays fatal-only: the clash was fed to the repair, but it
+    // is diagnostic of a soft rule and must not surface here.
+    expect(body.violations.join("\n")).not.toContain('puts "cold drink"');
   });
 
   it("keeps a script-valid first attempt when the repair call transport-fails", async () => {

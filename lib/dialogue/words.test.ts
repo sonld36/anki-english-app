@@ -42,6 +42,21 @@ describe("containsWord", () => {
     expect(containsWord("anything", "")).toBe(false);
     expect(containsWord("anything", "   ")).toBe(false);
   });
+
+  it("treats straight and typographic apostrophes as interchangeable", () => {
+    // Anki sentence targets carry `'` while the model often writes `’` (or
+    // the reverse) — a mismatch would be a fatal violation no repair fixes.
+    expect(
+      containsWord("Excuse me, I don’t mean to interrupt, but…", "I don't mean to interrupt")
+    ).toBe(true);
+    expect(
+      containsWord("Excuse me, I don't mean to interrupt.", "I don’t mean to interrupt")
+    ).toBe(true);
+    expect(containsWord("She said don’t.", "don't")).toBe(true);
+    expect(containsWord("She said don't.", "don’t")).toBe(true);
+    // Still whole-word on both sides of the variant.
+    expect(containsWord("He said donuts.", "don't")).toBe(false);
+  });
 });
 
 describe("escapeHtml", () => {
@@ -115,6 +130,15 @@ describe("renderHighlightedHtml", () => {
   it("highlights every occurrence", () => {
     expect(renderHighlightedHtml("cold, very cold.", ["cold"])).toBe(
       '<mark class="word-highlight">cold</mark>, very <mark class="word-highlight">cold</mark>.'
+    );
+  });
+
+  it("highlights across apostrophe variants, keeping the text's own character", () => {
+    expect(renderHighlightedHtml("She said don’t worry.", ["don't"])).toBe(
+      'She said <mark class="word-highlight">don’t</mark> worry.'
+    );
+    expect(renderHighlightedHtml("She said don't worry.", ["don’t"])).toBe(
+      "She said <mark class=\"word-highlight\">don't</mark> worry."
     );
   });
 

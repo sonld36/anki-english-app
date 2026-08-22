@@ -221,11 +221,23 @@ function hintFaults(attempt: Attempt): string[] {
   return attempt.result.ok ? [] : attempt.result.hintViolations;
 }
 
-function allFaults(attempt: Attempt): string[] {
-  return [...scriptFaults(attempt), ...hintFaults(attempt)];
+function softFaults(attempt: Attempt): string[] {
+  return attempt.result.ok ? [] : attempt.result.softViolations;
 }
 
-/** Does this attempt break no *script* rule? Its hints may still be wrong. */
+/** Every fault that cannot cost the user the script: soft rules and hints. */
+function nonFatalFaults(attempt: Attempt): string[] {
+  return [...softFaults(attempt), ...hintFaults(attempt)];
+}
+
+function allFaults(attempt: Attempt): string[] {
+  return [...scriptFaults(attempt), ...nonFatalFaults(attempt)];
+}
+
+/**
+ * Does this attempt break no *fatal* script rule? Its hints may still be
+ * wrong, and a soft finding (the consonant clash) may still stand.
+ */
 function isScriptClean(attempt: Attempt): boolean {
   return scriptFaults(attempt).length === 0;
 }
@@ -233,16 +245,18 @@ function isScriptClean(attempt: Attempt): boolean {
 /**
  * The attempt to hand the user, or `null` if none is usable.
  *
- * Script-clean is the bar: a script that breaks a rule Epic 2 rests on is not
- * a script we may return at all. Among the ones that clear it, fewer hint
- * faults wins; ties keep the earlier attempt, so a repair that changed nothing
- * material does not churn the result.
+ * Fatal-clean is the bar: a script that breaks a rule Epic 2 rests on is not
+ * a script we may return at all. Among the ones that clear it, fewer non-fatal
+ * faults (hints + soft) wins; ties keep the earlier attempt, so a repair that
+ * changed nothing material does not churn the result.
  */
 function bestAttempt(attempts: Attempt[]): Attempt | null {
   const usable = attempts.filter(isScriptClean);
   if (usable.length === 0) return null;
   return usable.reduce((best, candidate) =>
-    hintFaults(candidate).length < hintFaults(best).length ? candidate : best
+    nonFatalFaults(candidate).length < nonFatalFaults(best).length
+      ? candidate
+      : best
   );
 }
 
@@ -424,12 +438,13 @@ export async function POST(req: NextRequest) {
   // the model understood and got it wrong, so switching models is not the fix —
   // feeding back the specific violations is. The free tier allows one
   // concurrent request and a call runs 5–15s, so the loop stops here.
-  // Hint violations are worth the same one attempt as script violations: it is
-  // the only chance to fix them, since hints are never generated again.
+  // Hint and soft violations are worth the same one attempt as script
+  // violations: it is the only chance to fix them, since hints are never
+  // generated again and a clash left standing degrades Epic 2 scoring.
   const firstFaults = allFaults(first);
   console.warn(
     isScriptClean(first)
-      ? `Script from ${workingModel} is valid but its hints are not; repairing:`
+      ? `Script from ${workingModel} is usable but has non-fatal faults; repairing:`
       : `Script from ${workingModel} rejected:`,
     firstFaults
   );
@@ -470,14 +485,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Hints that are still wrong must not cost the user their script. The script
-  // itself obeys every rule Epic 2 rests on; the hint ladder has no consumer
-  // until Story 2.4, and a bad rung is a worse hint, not a broken session.
+  // Non-fatal faults that are still standing must not cost the user their
+  // script. The script itself obeys every fatal rule Epic 2 rests on; the hint
+  // ladder has no consumer until Story 2.4, and a consonant clash is a worse
+  // line to score, not a broken session.
   const best = bestAttempt(attempts);
   if (best) {
     console.warn(
-      `Script from ${workingModel} accepted with faulty hints:`,
-      hintFaults(best)
+      `Script from ${workingModel} accepted with non-fatal faults:`,
+      nonFatalFaults(best)
     );
     return respondWithScript(best.script);
   }

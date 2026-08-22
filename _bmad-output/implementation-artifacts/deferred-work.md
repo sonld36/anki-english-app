@@ -81,3 +81,19 @@ Pre-existing issues surfaced incidentally by reviews. Not caused by the story th
 - source_spec: `spec-1-1-nap-tu-vung-qua-lop-nguon-thay-the-duoc.md`
   summary: The collection id interpolates unescaped into the AnkiConnect search query.
   evidence: `fetchDeckCards` builds `` `deck:"${deckName}"` `` from a `decodeURIComponent`'d URL segment. A name containing `"` breaks the query and a crafted URL can alter the search expression. Pre-existing and bounded by the read-only `ALLOWED_ACTIONS` whitelist, so it widens read scope rather than enabling writes.
+
+- source_spec: `spec-fix-dialogue-422-vocab-parsing.md`
+  summary: The Back-bold fallback only triggers when the Front fails the Vietnamese-letters test, so an English-language (or diacritic-free Vietnamese) instruction front is accepted as the learnable unit.
+  evidence: `parseCard` strategy 1 checks `isUsableEnglish(frontUnit)` only; a shared deck with fronts like "Listen and repeat the sentence" passes as the word while the real unit sits in Back's bold. All of the user's current decks write instructions with diacritics, so this is a portability gap, not a live failure.
+
+- source_spec: `spec-fix-dialogue-422-vocab-parsing.md`
+  summary: Phrase-deck placeholders like "(sb)", "(sth)", "(one's)" survive cleaning and produce permanently unmatchable target words.
+  evidence: `POS_TOKEN` covers grammatical abbreviations only; "look after (sb)" keeps the parenthetical, and a target word containing "(sb)" can never appear verbatim in dialogue text, so every generation from such a card burns the repair and 422s. Not present in the user's current decks.
+
+- source_spec: `spec-fix-dialogue-422-vocab-parsing.md`
+  summary: `stripHtml`'s four-entity decoding now affects the `word` field, where an undecoded entity is a fatal match failure rather than cosmetic noise.
+  evidence: Extends the existing `&agrave;` deferred entry: a front containing `don&#39;t` yields a word with the literal entity, `containsWord` can never match it in generated text, and the target-word violation is fatal. Pre-existing decoder, newly consequential because words are now extracted from richer HTML.
+
+- source_spec: `spec-fix-dialogue-422-vocab-parsing.md`
+  summary: Long first-person sentence targets from shadowing decks still 422 sometimes, because the model naturally rewrites the person rather than quoting the line verbatim.
+  evidence: Observed live after the fix: the card "I have chronic pain or a chronic backache" produced the line "Imagine if you had chronic pain or a chronic backache" — a fatal target-word violation that survived the repair. Extraction is correct here; the limit is that `validateScript` demands verbatim whole-phrase presence while the prompt asks for natural dialogue, and a first-person sentence assigned to the wrong speaker cannot be both. Affects sentence-shadowing decks only, and only some word selections; single words and short phrases are unaffected. Options: relax matching for long targets, prefer assigning such targets to the matching speaker, or let a long-target miss be a soft violation.

@@ -24,15 +24,24 @@ import { containsSequence, contentWords, tokenize } from "./stopwords";
 import { containsWord, wordPattern } from "./words";
 
 /**
- * Two separate lists, on purpose. A broken script rule means the user cannot
- * have this script at all; a broken hint rule means one rung of a ladder that
- * has no consumer until Story 2.4 came out wrong. The route has to be able to
+ * Three separate lists, on purpose. A broken script rule (`violations`) means
+ * the user cannot have this script at all; a broken hint rule
+ * (`hintViolations`) means one rung of a ladder that has no consumer until
+ * Story 2.4 came out wrong; a soft rule (`softViolations`, today only the
+ * consonant clash) is a quality concern the repair attempt should hear about
+ * but that must never produce a 422 on its own. The route has to be able to
  * tell them apart, so it can hand over a script whose only remaining faults
- * are hints instead of charging the user a whole generation for them.
+ * are non-fatal instead of charging the user a whole generation for them.
+ * Don't merge them — the route's 422 body carries `violations` only.
  */
 export type ValidationResult =
   | { ok: true }
-  | { ok: false; violations: string[]; hintViolations: string[] };
+  | {
+      ok: false;
+      violations: string[];
+      hintViolations: string[];
+      softViolations: string[];
+    };
 
 /**
  * Consonants that must not begin the word immediately following `word`.
@@ -319,12 +328,14 @@ export function validateScript(
 ): ValidationResult {
   const violations: string[] = [];
   const hintViolations: string[] = [];
+  const softViolations: string[] = [];
 
   if (typeof script !== "object" || script === null) {
     return {
       ok: false,
       violations: ["The script must be a JSON object with a `turns` array."],
       hintViolations,
+      softViolations,
     };
   }
 
@@ -334,7 +345,7 @@ export function validateScript(
   }
   if (!Array.isArray(candidate.turns)) {
     violations.push("`turns` must be an array of turns.");
-    return { ok: false, violations, hintViolations };
+    return { ok: false, violations, hintViolations, softViolations };
   }
 
   const turns: DialogueTurn[] = [];
@@ -352,7 +363,7 @@ export function validateScript(
     );
   });
   if (turns.length !== candidate.turns.length) {
-    return { ok: false, violations, hintViolations };
+    return { ok: false, violations, hintViolations, softViolations };
   }
 
   if (turns.length < MIN_TURNS || turns.length > MAX_TURNS) {
@@ -431,9 +442,14 @@ export function validateScript(
 
       present.add(key);
 
+      // Soft, not fatal: real decks are full of words ending in t/d/s
+      // (`seat`, `sweet`, `quiet`) and the model repeatedly fails to reword
+      // around them. The finding still buys the one repair attempt — the
+      // pronunciation concern is real for Epic 2 scoring — but it can never
+      // cost the user the generation.
       const clash = findConsonantClash(turn.text, word);
       if (clash) {
-        violations.push(
+        softViolations.push(
           `Turn ${n} puts "${word} ${clash}" in the text. A target word ` +
             `ending in -ed, -s, -d or -t must not be immediately followed by ` +
             `a word starting with that same consonant, because the ending is ` +
@@ -471,7 +487,9 @@ export function validateScript(
     }
   }
 
-  return violations.length === 0 && hintViolations.length === 0
+  return violations.length === 0 &&
+    hintViolations.length === 0 &&
+    softViolations.length === 0
     ? { ok: true }
-    : { ok: false, violations, hintViolations };
+    : { ok: false, violations, hintViolations, softViolations };
 }
