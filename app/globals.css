@@ -381,6 +381,15 @@ select.input {
   --glow-record: rgba(34, 197, 94, 0.45);
   --glow-record-soft: rgba(34, 197, 94, 0.24);
   --glow-record-faint: rgba(34, 197, 94, 0.12);
+
+  /* The score card's three tints, the same way and for the same reason: a
+     literal 12% alpha of --success / --danger / --warning in this mode. They
+     live here rather than on .session-score so both modes are declared in one
+     place — a tint declared once, in the dark values only, pairs a dark-mode
+     wash with a light-mode border the moment the theme flips. */
+  --score-pass: rgba(74, 222, 128, 0.12);
+  --score-fail: rgba(251, 113, 133, 0.12);
+  --score-warn: rgba(251, 191, 36, 0.12);
 }
 
 :root[data-theme="light"] .session-screen {
@@ -388,6 +397,11 @@ select.input {
   --glow-record: rgba(78, 115, 85, 0.45);
   --glow-record-soft: rgba(78, 115, 85, 0.24);
   --glow-record-faint: rgba(78, 115, 85, 0.12);
+
+  /* 12% of the light --success / --danger / --warning. */
+  --score-pass: rgba(21, 128, 61, 0.12);
+  --score-fail: rgba(190, 18, 60, 0.12);
+  --score-warn: rgba(161, 98, 7, 0.12);
 }
 
 /* The session screen owns the whole viewport: the chat scrolls inside it and
@@ -556,6 +570,217 @@ body:has(.session-screen) {
 
 .session-screen .session-notice-dismiss:hover {
   color: var(--ink-primary);
+}
+
+/* ----------------------------------------------------------------------
+   THE SCORE CARD (Story 2.3)
+
+   Sticks under the turn just spoken. `radius md`, hairline border, layered
+   with background colour and never with a shadow — the mic's recording glow
+   stays the one sanctioned exception.
+
+   Every state carries a glyph AND a word AND (only then) a colour. The tone
+   modifiers below tint the border and the verdict; they never carry the state
+   on their own, which is why `--fail` also gets a solid left edge and the
+   tier-2 rows keep the dashed border from DESIGN.md's accessibility table.
+
+   `color-mix()` is unusable in this file (lightningcss drops the alpha in the
+   fallback it emits outside @keyframes), so the tints are literal rgba()
+   values — declared per theme up on .session-screen beside --glow-record*,
+   which is the precedent for exactly this. See AGENTS.md.
+   ---------------------------------------------------------------------- */
+.session-screen .session-score {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(88%, 46ch);
+  margin-top: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+.session-screen .session-score--info {
+  border-style: dashed;
+}
+
+.session-screen .session-score--success {
+  border-color: var(--success);
+  background: var(--score-pass);
+}
+
+.session-screen .session-score--danger {
+  border-color: var(--danger);
+  background: var(--score-fail);
+  /* A second, non-colour cue for the verdict that matters most. */
+  border-left-width: 3px;
+}
+
+.session-screen .session-score--warning {
+  border-color: var(--warning);
+  border-style: dashed;
+  background: var(--score-warn);
+}
+
+/* Reachable by a screen reader, invisible on screen.
+   The chips and the verdict carry their state in a glyph, a colour and a
+   number — all three of which are `aria-hidden` decoration or bare digits, so
+   this is where the *words* live: "chưa đạt, âm /d/, điểm 10 trên 100". The
+   one-line card summary uses it too, as the single node allowed to announce.
+   `clip-path` + 1px rather than `display: none`, which removes it from the
+   accessibility tree along with everything else. */
+.session-screen .session-score__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip-path: inset(50%);
+}
+
+.session-screen .session-score__verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.session-screen .session-score__glyph {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.session-screen .session-score__label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.session-screen .session-score--success .session-score__label {
+  color: var(--success);
+}
+
+.session-screen .session-score--danger .session-score__label {
+  color: var(--danger);
+}
+
+.session-screen .session-score--warning .session-score__label {
+  color: var(--warning);
+}
+
+/* The one number on the card that is not a score. `tabular-nums` because it
+   is measured and would otherwise jog sideways between renders. */
+.session-screen .session-score__time {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-screen .session-score__detail {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.session-screen .session-score__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-screen .session-score__chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-primary);
+  background: var(--surface-sunken);
+}
+
+.session-screen .session-score__chip--ok {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* Tier 2: `!` plus a dashed border, straight from DESIGN.md's table. */
+.session-screen .session-score__chip--warn {
+  border-color: var(--warning);
+  border-style: dashed;
+  color: var(--warning);
+}
+
+.session-screen .session-score__chip--bad {
+  border-color: var(--danger);
+  color: var(--danger);
+  /* The wavy underline the accessibility table pairs with `✗`. */
+  text-decoration: underline wavy var(--danger);
+  text-underline-offset: 3px;
+}
+
+/* The first and only consumer of --font-phonetic. Inter's Google-Fonts subset
+   is latin + latin-ext, so IPA (θ ð ʃ ɪ ə) falls back — this makes that
+   fallback deliberate rather than accidental. */
+.session-screen .session-score__ipa {
+  font-family: var(--font-phonetic);
+  font-weight: 400;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.session-screen .session-score__num {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-screen .session-score__findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-screen .session-score__finding {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+/* Tier 3 lives behind this, per the epic: function words never compete with
+   the two findings that matter. */
+.session-screen .session-score__more > summary {
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.session-screen .session-score__more > summary:focus-visible {
+  outline: 2px solid var(--chrome);
+  outline-offset: 2px;
+}
+
+.session-screen .session-score__more[open] > summary {
+  margin-bottom: var(--space-1);
 }
 
 /* ============================

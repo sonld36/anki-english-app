@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { DialogueScript, DialogueTurn } from "./dialogue/types";
 import type { HistoryEntry } from "./history";
 import { recordingKey } from "./recording";
+import { MIN_LEAKED_CONTENT_WORDS } from "./dialogue/types";
+import { containsSequence, contentWords, tokenize } from "./dialogue/stopwords";
+import {
+  assessTurn,
+  namedWords,
+  scoreCard,
+  type AssessedWord,
+} from "./pronunciation";
 import {
   AUDIO_START_GRACE_MS,
   advanceDelayMs,
@@ -29,6 +37,10 @@ import {
   micEnabled,
   readingDelayMs,
   sessionSummary,
+  beginScoring,
+  completeScoring,
+  failScoring,
+  skipScoring,
   shouldStopPlayback,
   startSession,
   turnPlan,
@@ -99,6 +111,9 @@ describe("createSession", () => {
       phase: "idle",
       recordingStartedAt: null,
       takes: {},
+      // Story 2.3's slot. Empty, and deliberately part of this full-object
+      // assertion so adding a field is a decision rather than an accident.
+      scores: {},
       micBlocked: false,
       takeBlocked: false,
     });
@@ -180,7 +195,8 @@ describe("completeCurrentTurn", () => {
     expect(next.cursor).toBe(1);
     expect(next.turnStartedAt).toBe(3_400);
     expect(next.completed).toEqual([
-      { index: 0, speaker: "system", elapsedMs: 2_400, take: null },
+      // A system turn has neither a take nor a score.
+      { index: 0, speaker: "system", elapsedMs: 2_400, take: null, score: null },
     ]);
   });
 
@@ -232,8 +248,8 @@ describe("endSession", () => {
     expect(ended.status).toBe("finished");
     expect(ended.turnStartedAt).toBeNull();
     expect(ended.completed).toEqual([
-      { index: 0, speaker: "system", elapsedMs: 1_000, take: null },
-      { index: 1, speaker: "learner", elapsedMs: 4_000, take: null },
+      { index: 0, speaker: "system", elapsedMs: 1_000, take: null, score: null },
+      { index: 1, speaker: "learner", elapsedMs: 4_000, take: null, score: null },
     ]);
     expect(sessionSummary(SCRIPT, ended)).toEqual({
       completedTurns: 2,
@@ -733,6 +749,9 @@ describe("the recording transitions", () => {
       "micBlocked",
       "phase",
       "recordingStartedAt",
+      // Story 2.3 added exactly one field, and this list is how that stays a
+      // decision. Still no attempt counter — that is Story 2.5's.
+      "scores",
       "status",
       "takeBlocked",
       "takes",
@@ -785,6 +804,8 @@ describe("the mic no longer advances the session on its own", () => {
       speaker: "learner",
       elapsedMs: 10_000,
       take: TAKE,
+      // Nothing asked for a score on this turn, so there is none to carry.
+      score: null,
     });
     // The next turn starts clean, and turn 1 stays replayable.
     expect(next.phase).toBe("idle");
@@ -976,55 +997,221 @@ describe("clockBasis", () => {
   });
 });
 
-describe("the leak sweep still finds nothing, now with takes in play", () => {
-  it("leaks no learner text or target word from any projection, in any state", () => {
-    const secrets = [
-      LEARNER_LINE_1,
-      LEARNER_LINE_2,
-      "Zebrafish",
-      "marmalade",
-      "vellum",
-      "Khi bạn chào lại",
-    ];
+/**
+ * The secrets, split — because Story 2.3 added a projection that has to name
+ * one of the two groups.
+ *
+ * `LINE_SECRETS` is the rule that never bends: the learner's line, the words
+ * of it they were not being taught, and the hint ladder. Nothing this module
+ * produces may contain any of it, the score card included.
+ *
+ * `TARGET_WORDS` is the exemption, and it is exactly one projection wide. The
+ * score card exists to tell the learner which target word they got wrong, so
+ * it must name them; `SessionState.scores` carries the assessment it is built
+ * from. Everything else — `TurnView`, `visibleTurnViews`, `sessionSummary`,
+ * `micAction`, `canContinue`, `clockBasis`, `takeReplayUnlocked`,
+ * `sampleReplayUnlocked` — still may not, and that is asserted below.
+ *
+ * The exemption is not a hole, because `MAX_TARGET_WORDS_PER_TURN` is 2 and
+ * `MIN_LEAKED_CONTENT_WORDS` is 4: the target words of one turn can never be
+ * a reconstructable run of its line. The card's *other* words are bounded by
+ * the same rule, pinned in the test after this one and in
+ * `lib/pronunciation.test.ts`.
+ */
+const LINE_SECRETS = [
+  LEARNER_LINE_1,
+  LEARNER_LINE_2,
+  // Content words of the learner's lines that are NOT target words. The card
+  // may name a badly-scored word, so this holds because the assessments the
+  // sweep builds only ever cover the target words themselves.
+  "quibble",
+  "dawn",
+  "Quixotic",
+  "thrums",
+  "beneath",
+  "Khi bạn chào lại",
+];
 
-    // Same sweep as before, but every learner turn is now recorded, replayed
-    // and re-recorded on the way through — the states this story adds.
+const TARGET_WORDS = ["Zebrafish", "marmalade", "vellum"];
+
+/** An assessment of turn 1's target words, one clean and one badly wrong. */
+function assessmentForTurn1() {
+  const words: AssessedWord[] = [
+    {
+      word: "zebrafish",
+      phonemes: [
+        { phoneme: "z", score: 88 },
+        { phoneme: "ɪ", score: 85 },
+        { phoneme: "ʃ", score: 82 },
+      ],
+    },
+    {
+      word: "marmalade",
+      phonemes: [
+        { phoneme: "m", score: 90 },
+        { phoneme: "l", score: 9 },
+        { phoneme: "d", score: 12 },
+      ],
+    },
+  ];
+  return assessTurn(words, SCRIPT.turns[1].targetWords);
+}
+
+describe("the leak sweep still finds nothing, now with takes and scores in play", () => {
+  it("leaks no learner line from any projection, in any state", () => {
+    // Same sweep as before, but every learner turn is now recorded, scored,
+    // failed and re-recorded on the way through — the states this story adds.
     const states: SessionState[] = [createSession()];
     let state = startSession(SCRIPT, 1_000);
     let at = 1_000;
     for (let i = 0; i <= SCRIPT.turns.length; i += 1) {
       states.push(state, endSession(state), blockMic(state));
       if (micAction(SCRIPT, state) === "record") {
+        const index = state.cursor;
         const recording = startRecording(state, at);
         const recorded = finishRecording(recording, {
-          key: `entry-1:${state.cursor}`,
+          key: `entry-1:${index}`,
           durationMs: 1_500,
           peak: 0.3,
         });
-        states.push(recording, recorded, cancelRecording(recording));
-        state = recorded;
+        const pending = beginScoring(recorded, index);
+        const scored = completeScoring(pending, index, assessmentForTurn1(), 1_900);
+        const failed = failScoring(recorded, index, "credential");
+        const skipped = skipScoring(recorded, index, 41_000);
+        states.push(
+          recording,
+          recorded,
+          cancelRecording(recording),
+          pending,
+          scored,
+          failed,
+          skipped,
+          // Re-recording on top of a scored turn: the score must be gone.
+          startRecording(scored, at + 500)
+        );
+        state = scored;
       }
       at += 1_000;
       state = completeCurrentTurn(SCRIPT, state, at);
     }
 
-    const projections = states.flatMap((s) => [
-      visibleTurnViews(SCRIPT, s),
-      sessionSummary(SCRIPT, s),
-      s,
-      SCRIPT.turns.map((t) => ({
-        mic: micAction(SCRIPT, s),
-        cont: canContinue(SCRIPT, s),
-        clock: clockBasis(s),
-        take: takeReplayUnlocked(s, t.index),
-        sample: sampleReplayUnlocked(SCRIPT, s, t.index, "ready"),
+    /**
+     * One state with the score slot lifted out — built by listing what stays
+     * rather than by destructuring what goes, so a new field on `SessionState`
+     * has to be added here deliberately rather than sliding into the sweep
+     * unexamined.
+     *
+     * That is only true because of the assertion below, which compares these
+     * keys against the real ones. Said without it, it was a comment describing
+     * a guarantee nothing provided: the exhaustive key list it pointed at is in
+     * a different `describe` block and never touches this object.
+     */
+    const stateWithoutScores = (s: SessionState) => ({
+      status: s.status,
+      cursor: s.cursor,
+      turnStartedAt: s.turnStartedAt,
+      phase: s.phase,
+      recordingStartedAt: s.recordingStartedAt,
+      takes: s.takes,
+      micBlocked: s.micBlocked,
+      takeBlocked: s.takeBlocked,
+      completed: s.completed.map((t) => ({
+        index: t.index,
+        speaker: t.speaker,
+        elapsedMs: t.elapsedMs,
+        take: t.take,
       })),
-    ]);
+    });
 
-    const serialised = JSON.stringify(projections);
-    for (const secret of secrets) {
+    /** The only field the sweep is allowed to omit — the score slot itself. */
+    const OMITTED = ["scores"];
+    for (const s of states) {
+      const lifted = stateWithoutScores(s);
+      expect([...Object.keys(lifted), ...OMITTED].sort()).toEqual(
+        Object.keys(s).sort()
+      );
+      // And the same for the completed turns it flattens: `score` is the one
+      // field lifted out there, and a new one must not ride along unlooked-at.
+      s.completed.forEach((turn, i) => {
+        expect([...Object.keys(lifted.completed[i]), "score"].sort()).toEqual(
+          Object.keys(turn).sort()
+        );
+      });
+    }
+
+    /** Everything but the fourth projection and the slot it is built from. */
+    const withoutScoring = states.flatMap((s) => {
+      return [
+        visibleTurnViews(SCRIPT, s),
+        sessionSummary(SCRIPT, s),
+        stateWithoutScores(s),
+        SCRIPT.turns.map((t) => ({
+          mic: micAction(SCRIPT, s),
+          cont: canContinue(SCRIPT, s),
+          clock: clockBasis(s),
+          take: takeReplayUnlocked(s, t.index),
+          sample: sampleReplayUnlocked(SCRIPT, s, t.index, "ready"),
+        })),
+      ];
+    });
+
+    /** The fourth projection, over every learner turn of every state. */
+    const cards = states.flatMap((s) =>
+      SCRIPT.turns
+        .filter((t) => t.speaker === "learner")
+        .map((t) => scoreCard(s.scores[t.index], t.targetWords, t.text))
+    );
+
+    // (1) The line itself — nowhere, in anything, ever. This includes the
+    //     score card and the raw `scores` slot.
+    const everything = JSON.stringify([...withoutScoring, cards, states]);
+    for (const secret of LINE_SECRETS) {
+      expect(everything).not.toContain(secret);
+    }
+
+    // (2) Target words — still forbidden everywhere except the card and the
+    //     score slot. If a future edit lets one back into `TurnView` or a
+    //     summary, this fails exactly as it did before Story 2.3.
+    const serialised = JSON.stringify(withoutScoring);
+    for (const secret of TARGET_WORDS) {
       expect(serialised).not.toContain(secret);
     }
+
+    // (3) And the exemption really is exercised — otherwise (2) would be
+    //     passing because the card is empty rather than because it is bounded.
+    expect(JSON.stringify(cards)).toContain("marmalade");
+  });
+
+  it("bounds what the card may name, even when every word scores zero", () => {
+    // The worst case for disclosure: nothing the learner said was recognised
+    // well, so an unbounded card would read the line back to them.
+    const line = SCRIPT.turns[1].text;
+    const targets = SCRIPT.turns[1].targetWords;
+    const everyWord: AssessedWord[] = line
+      .replace(/[.]/g, "")
+      .split(/\s+/)
+      .map((word) => ({ word, phonemes: [{ phoneme: "t", score: 0 }] }));
+
+    const state = completeScoring(
+      beginScoring(onLearnerTurn(), 1),
+      1,
+      assessTurn(everyWord, targets),
+      2_000
+    );
+    const card = scoreCard(state.scores[1], targets, line);
+    const named = new Set(namedWords(card).flatMap((w) => tokenize(w)));
+    const always = new Set(targets.flatMap((t) => tokenize(t)));
+    const lineContent = contentWords(line, always);
+
+    // The same rule the hint validator enforces: four consecutive content
+    // words is where naming stops describing and starts quoting.
+    for (let i = 0; i + MIN_LEAKED_CONTENT_WORDS <= lineContent.length; i += 1) {
+      const window = lineContent.slice(i, i + MIN_LEAKED_CONTENT_WORDS);
+      expect(containsSequence(window.filter((t) => named.has(t)), window)).toBe(
+        false
+      );
+    }
+    expect(JSON.stringify(card)).not.toContain(line);
   });
 
   it("the take reference carries a key, never any part of the line", () => {
@@ -1197,5 +1384,185 @@ describe("a take's key and its slot in `takes` name the same turn", () => {
         expect(completed.take.key).toBe(recordingKey(entryId, completed.index));
       }
     }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Story 2.3 — the score slot, and what it is forbidden to touch
+// ---------------------------------------------------------------------------
+
+/** Turn 1, recorded and waiting on a verdict. */
+function scoringTurn1(): SessionState {
+  return beginScoring(finishRecording(startRecording(onLearnerTurn(), 5_000), TAKE), 1);
+}
+
+describe("the scoring lifecycle", () => {
+  it("walks pending → scored, keyed by turn index", () => {
+    const pending = scoringTurn1();
+    expect(pending.scores[1]).toEqual({ state: "pending" });
+
+    const assessment = assessTurn(
+      [{ word: "zebrafish", phonemes: [{ phoneme: "z", score: 90 }] }],
+      ["Zebrafish"]
+    );
+    const scored = completeScoring(pending, 1, assessment, 1_900);
+    expect(scored.scores[1]).toEqual({ state: "scored", assessment, latencyMs: 1_900 });
+    // Only that turn.
+    expect(scored.scores[0]).toBeUndefined();
+    expect(scored.scores[3]).toBeUndefined();
+  });
+
+  it("walks pending → failed without inventing anything", () => {
+    const failed = failScoring(scoringTurn1(), 1, "network");
+    expect(failed.scores[1]).toEqual({ state: "failed", failure: "network" });
+  });
+
+  it("records a take that was never sent as a decision, not a failure", () => {
+    const skipped = skipScoring(scoringTurn1(), 1, 41_000);
+    expect(skipped.scores[1]).toEqual({ state: "too-long", durationMs: 41_000 });
+  });
+
+  it("keeps `scores` and `completed` in step when the verdict lands late", () => {
+    // The usual case, not an edge one: assessment takes a second or two and
+    // "Tiếp" is open immediately, so the answer routinely arrives after the
+    // cursor has moved. A snapshot taken at completion time would freeze the
+    // completed turn on `pending` for ever — and Story 2.7 reads exactly that.
+    const advanced = completeCurrentTurn(SCRIPT, scoringTurn1(), 12_000);
+    expect(advanced.cursor).toBe(2);
+    expect(advanced.completed[1].score).toEqual({ state: "pending" });
+
+    const assessment = assessTurn(
+      [{ word: "zebrafish", phonemes: [{ phoneme: "z", score: 5 }] }],
+      ["Zebrafish"]
+    );
+    const late = completeScoring(advanced, 1, assessment, 2_100);
+    expect(late.completed[1].score).toEqual({
+      state: "scored",
+      assessment,
+      latencyMs: 2_100,
+    });
+    expect(late.scores[1]).toEqual(late.completed[1].score);
+  });
+
+  it("survives the end of the session — there is no blob to collect", () => {
+    // Unlike `takes`, which are dropped because their blobs are.
+    const scored = completeScoring(scoringTurn1(), 1, assessTurn([], []), 1_000);
+    const ended = endSession(scored);
+    expect(ended.takes).toEqual({});
+    expect(ended.scores[1]).toBeDefined();
+  });
+
+  it("starts a new session with nothing scored", () => {
+    const scored = completeScoring(scoringTurn1(), 1, assessTurn([], []), 1_000);
+    expect(startSession(SCRIPT, 50_000, scored).scores).toEqual({});
+  });
+});
+
+describe("re-recording drops the score with the take", () => {
+  it("returns the card to empty rather than hanging a stale verdict on a new take", () => {
+    const assessment = assessTurn(
+      [{ word: "marmalade", phonemes: [{ phoneme: "d", score: 2 }] }],
+      ["marmalade"]
+    );
+    const scored = completeScoring(scoringTurn1(), 1, assessment, 1_500);
+    expect(scored.takes[1]).toEqual(TAKE);
+    expect(scored.scores[1]).toBeDefined();
+
+    const again = startRecording(scored, 20_000);
+    expect(again.takes[1]).toBeUndefined();
+    expect(again.scores[1]).toBeUndefined();
+    // And nothing renders from the empty slot.
+    expect(scoreCard(again.scores[1], ["marmalade"], LEARNER_LINE_1)).toBeNull();
+  });
+
+  it("leaves an earlier turn's score alone", () => {
+    const scored = completeScoring(scoringTurn1(), 1, assessTurn([], []), 1_000);
+    const onTurn3 = completeCurrentTurn(
+      SCRIPT,
+      completeCurrentTurn(SCRIPT, scored, 12_000),
+      13_000
+    );
+    expect(onTurn3.cursor).toBe(3);
+    const recordingTurn3 = startRecording(onTurn3, 14_000);
+    expect(recordingTurn3.scores[1]).toBeDefined();
+  });
+});
+
+describe("scoring never gates the session", () => {
+  it("opens `Tiếp` on the take alone, before any verdict exists", () => {
+    const recorded = finishRecording(startRecording(onLearnerTurn(), 5_000), TAKE);
+    expect(recorded.scores[1]).toBeUndefined();
+    expect(canContinue(SCRIPT, recorded)).toBe(true);
+  });
+
+  it("keeps `Tiếp` open while scoring is in flight and after it fails", () => {
+    const pending = scoringTurn1();
+    expect(canContinue(SCRIPT, pending)).toBe(true);
+
+    for (const failure of ["network", "timeout", "credential", "service", "unreadable"] as const) {
+      expect(canContinue(SCRIPT, failScoring(pending, 1, failure))).toBe(true);
+    }
+    expect(canContinue(SCRIPT, skipScoring(pending, 1, 41_000))).toBe(true);
+  });
+
+  it("advances exactly as it would have with no scoring at all", () => {
+    const withScore = completeCurrentTurn(SCRIPT, scoringTurn1(), 12_000);
+    const without = completeCurrentTurn(
+      SCRIPT,
+      finishRecording(startRecording(onLearnerTurn(), 5_000), TAKE),
+      12_000
+    );
+    expect(withScore.cursor).toBe(without.cursor);
+    expect(withScore.status).toBe(without.status);
+    expect(withScore.phase).toBe(without.phase);
+  });
+
+  it("does not change what the mic means", () => {
+    const pending = scoringTurn1();
+    expect(micAction(SCRIPT, pending)).toBe("record");
+    expect(micAction(SCRIPT, failScoring(pending, 1, "service"))).toBe("record");
+  });
+});
+
+describe("scoring cannot open the audio leak", () => {
+  it("keeps `audioTurnToPlay` null on a learner turn in every scoring state", () => {
+    // A learner line has a blob — Story 1.4 synthesises both roles — so a
+    // stray `play(index)` would read the sentence they are supposed to
+    // produce out loud. Scoring must not become a new way in.
+    const assessment = assessTurn([], []);
+    const states = [
+      scoringTurn1(),
+      completeScoring(scoringTurn1(), 1, assessment, 1_000),
+      failScoring(scoringTurn1(), 1, "credential"),
+      skipScoring(scoringTurn1(), 1, 41_000),
+    ];
+    for (const state of states) {
+      expect(currentTurnIndex(SCRIPT, state)).toBe(1);
+      for (const status of ["idle", "fetching", "ready", "failed"] as const) {
+        expect(audioTurnToPlay(SCRIPT, state, status)).toBeNull();
+      }
+    }
+  });
+
+  it("does not unlock the native sample on its own — only a take does", () => {
+    // `sampleReplayUnlocked` is Story 2.2's rule and scoring is not a way
+    // around it: a scored turn with no take must stay sealed.
+    const noTake: SessionState = { ...onLearnerTurn(), scores: { 1: { state: "pending" } } };
+    expect(sampleReplayUnlocked(SCRIPT, noTake, 1, "ready")).toBe(false);
+  });
+
+  it("leaves `TurnView` exactly as it was", () => {
+    const scored = completeScoring(scoringTurn1(), 1, assessTurn([], []), 1_000);
+    const view = visibleTurnViews(SCRIPT, scored).find((v) => v.index === 1);
+    expect(view?.text).toBeNull();
+    expect(view?.targetWords).toEqual([]);
+    expect(Object.keys(view ?? {}).sort()).toEqual([
+      "index",
+      "speaker",
+      "take",
+      "targetWords",
+      "text",
+    ]);
   });
 });

@@ -18,20 +18,24 @@ import {
   advanceDelayMs,
   audioNote,
   audioTurnToPlay,
+  beginScoring,
   blockMic,
   blockTake,
   canContinue,
   cancelRecording,
   clockBasis,
   completeCurrentTurn,
+  completeScoring,
   createSession,
   currentTurnIndex,
   endSession,
+  failScoring,
   finishRecording,
   isPracticable,
   micAction,
   micEnabled,
   sampleReplayUnlocked,
+  skipScoring,
   takeReplayUnlocked,
   sessionSummary,
   shouldStopPlayback,
@@ -42,6 +46,15 @@ import {
   type MicAction,
   type SessionState,
 } from "@/lib/session";
+import { useTurnScorer } from "@/hooks/useTurnScorer";
+import {
+  SCORING_DISCLOSURE,
+  scoreCard,
+  type ChipLevel,
+  type ScoreCard,
+  type ScoreChip,
+} from "@/lib/pronunciation";
+import type { TurnTake } from "@/lib/session";
 
 /**
  * The turn-by-turn practice screen — the surface Stories 2.2–2.7 bolt onto.
@@ -58,10 +71,18 @@ import {
  * the turn bubble, and the take + the native sample get a play control each
  * once a take exists. The control row still holds exactly three slots.
  *
- * What it does **not** do is as load-bearing as what it does. No scoring, no
- * hint content, no attempt limit, no latency metric — those are 2.3–2.6. And
- * the learner's own line is never revealed *as text*, in any state; only its
- * audio unlocks, and only after they have recorded themselves.
+ * Story 2.3 adds the score card: the take goes to `/api/pronunciation` the
+ * moment it is stored, the card mounts under that turn in a pending state, and
+ * it fills in when the verdict lands. It is a **fourth projection**
+ * (`scoreCard` in `lib/pronunciation.ts`), so `TurnView` is untouched and the
+ * learner's line is still never rendered as text — the card names the turn's
+ * own target words and the specific words that scored badly, bounded so they
+ * can never add up to the line. Nothing about scoring gates the session:
+ * "Tiếp" is open before the request leaves and stays open however it ends.
+ *
+ * What it does **not** do is as load-bearing as what it does. No hint content,
+ * no attempt limit, no latency metric, no end-of-session summary — those are
+ * 2.4–2.7.
  */
 
 /** One column of the control row, so nothing shifts between states. */
@@ -83,6 +104,47 @@ const MIC_GLYPH: Record<MicAction, string> = {
 
 function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * What a chip says out loud.
+ *
+ * The glyph is `aria-hidden` (it is a decorative duplicate of the colour and
+ * the border), so without this a screen reader reads `cold /d/ 10` — three
+ * facts and no verdict, which is the state-by-colour-alone failure DESIGN.md
+ * and AGENTS.md both forbid. The number gets a name here too: a bare `10` next
+ * to a word is not a score to anyone who cannot see the chip it sits in.
+ */
+const CHIP_LEVEL_TEXT: Record<ChipLevel, string> = {
+  ok: "đạt",
+  warn: "cần chú ý",
+  bad: "chưa đạt",
+};
+
+function chipSpeech(chip: ScoreChip): string {
+  const parts = [CHIP_LEVEL_TEXT[chip.level]];
+  if (chip.phoneme) parts.push(`âm ${chip.phoneme}`);
+  parts.push(
+    chip.score === null ? "chưa nghe ra" : `điểm ${chip.score} trên 100`
+  );
+  return `: ${parts.join(", ")}.`;
+}
+
+/**
+ * The one line the card announces.
+ *
+ * The card is **not** its own live region: it sits inside the transcript's
+ * `role="log" aria-live="polite"`, and a nested one meant the whole card —
+ * verdict, every chip, both finding lists — was read out again on
+ * `pending → scored`, and once more each time the `<details>` opened. The card
+ * subtree is muted with `aria-live="off"` and this short summary is the only
+ * thing that speaks; everything else is still there to be read at leisure.
+ */
+function cardSpeech(card: ScoreCard): string {
+  if (card.state === "pending") return "Đang chấm phát âm.";
+  const needsWork = card.chips.filter((chip) => chip.level !== "ok").length;
+  const tail = needsWork > 0 ? ` ${needsWork} từ mục tiêu cần sửa, xem chi tiết bên dưới.` : "";
+  return `Kết quả chấm phát âm: ${card.label}.${tail}`;
 }
 
 function formatClock(ms: number): string {
@@ -108,12 +170,15 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
 
   const sampleAudio = useSampleAudio(script);
   const recorder = useTurnRecorder(entry.id);
+  const scorer = useTurnScorer();
   /**
    * Pulled out because they are stable `useCallback`s while the object around
    * them is rebuilt every render: depending on `recorder` itself would rebuild
    * `advance` and re-run the cleanup effect on every clock tick.
    */
   const { stopTakePlayback, clearTakes, cancel: cancelCapture } = recorder;
+  /** Same reason as the recorder's: stable `useCallback`s on a rebuilt object. */
+  const { cancel: cancelScoring, resetDisclosure } = scorer;
   /** Stable, and a real stop rather than `play`'s toggle — see `stopPlayback`. */
   const stopSample = sampleAudio.stop;
   const [session, setSession] = useState<SessionState>(createSession);
@@ -372,13 +437,86 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
     stopPlayback();
     endCapture();
     clearTakes();
+    // A request in flight belongs to a take that is about to be deleted, and
+    // the new session must disclose again before its first upload.
+    cancelScoring();
+    resetDisclosure();
     setSession((prev) => startSession(script, Date.now(), prev));
   };
   const handleEnd = () => {
     stopPlayback();
     endCapture();
     stopTakePlayback();
+    // Nothing is left to score: the blobs go with the session.
+    cancelScoring();
     setSession((prev) => endSession(prev));
+  };
+
+  /**
+   * Send the take just stored for scoring.
+   *
+   * Everything it decides is decided elsewhere: `scoringPlan` is the cost guard
+   * *and* NFR-10's once-per-session ordering (the clip length is checked before
+   * the disclosure is claimed, so a take that never leaves the device cannot
+   * spend it), and the verdict is `lib/pronunciation.ts`'s. `beginScoring`
+   * lands **before** the request leaves, so the card mounts in its worded
+   * pending state the instant the mic stops; "Tiếp" is already open by then and
+   * never waits on any of this.
+   */
+  const startScoringTurn = async (index: number, take: TurnTake) => {
+    const turn = script?.turns[index];
+    if (!turn) return;
+
+    const plan = scorer.plan(take.durationMs);
+    if (plan.kind === "skip") {
+      // The cost guard the epic assigns to this story. Nothing is sent and
+      // nothing is truncated — a verdict on the first 30s of a 90s take would
+      // be a verdict on a different recording.
+      //
+      // `plan.notice` is deliberately **not** shown: `scoreCard`'s `too-long`
+      // detail is the same sentence, so showing both put one message on two
+      // surfaces in the same instant. The card carries it, because it is
+      // anchored to the turn it is about and does not vanish with the next
+      // notice.
+      setSession((prev) => skipScoring(prev, index, take.durationMs));
+      return;
+    }
+
+    setSession((prev) => beginScoring(prev, index));
+
+    const outcome = await scorer.score(
+      take.key,
+      turn.text,
+      turn.targetWords,
+      // Before the audio leaves the device, never after — and only once the
+      // blob is known to exist. Telling someone their voice has been uploaded
+      // is not a disclosure, and spending the notice on an upload that never
+      // happened leaves the real first one silent.
+      (notice) => recorder.showNotice(notice)
+    );
+    // Superseded by a re-record, a restart or an unmount: the turn this
+    // belonged to may not be the turn that is there now.
+    if (outcome.kind === "aborted") return;
+    if (outcome.kind === "too-long") {
+      // The route's byte cap fired where the millisecond cap did not. Same
+      // state, same single surface as the plan's own skip.
+      setSession((prev) => skipScoring(prev, index, take.durationMs));
+      return;
+    }
+    if (outcome.kind === "no-speech") {
+      // Azure worked and heard nothing to score. `ScoringFailure` carries its
+      // own member for exactly this, so the card says what happened rather
+      // than "chấm hỏng" — one surface, the card, like every other outcome.
+      setSession((prev) => failScoring(prev, index, "no-speech"));
+      return;
+    }
+    if (outcome.kind === "failed") {
+      setSession((prev) => failScoring(prev, index, outcome.failure));
+      return;
+    }
+    setSession((prev) =>
+      completeScoring(prev, index, outcome.assessment, outcome.latencyMs)
+    );
   };
 
   /**
@@ -407,7 +545,15 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
       micBusy.current = true;
       stopPlayback();
       stopTakePlayback();
-      recorder.dismissNotice();
+      // `startRecording` drops this turn's score along with its take; this
+      // drops the request that would have written a new one onto the take
+      // being replaced.
+      cancelScoring();
+      // Everything except NFR-10's disclosure. It is said once per session and
+      // the flag is already spent, so dismissing it because the learner tapped
+      // the mic again a second later would mean this session never shows it —
+      // the one notice that is not allowed to be missed.
+      if (recorder.notice !== SCORING_DISCLOSURE) recorder.dismissNotice();
       let failure;
       try {
         failure = await recorder.start();
@@ -447,10 +593,18 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
     } finally {
       micBusy.current = false;
     }
+    // The trim and the IndexedDB write are awaited, and "Kết thúc buổi" is one
+    // tap away throughout. `finishRecording` no-ops off `phase: "recording"`,
+    // but scoring would not: it would upload a take of a session that is over
+    // and mount a pending card under a finished transcript.
+    const after = live.current;
+    const stillThisTurn = after.status === "running" && after.cursor === index;
     if (outcome.kind === "take") {
       setSession((prev) => finishRecording(prev, outcome.take));
+      if (stillThisTurn) void startScoringTurn(index, outcome.take);
       return;
     }
+    if (!stillThisTurn) return;
     if (outcome.kind === "empty") {
       // Samples arrived and none of them was speech. Nothing is wrong with the
       // machinery, so the turn simply resets and the mic is offered again.
@@ -652,7 +806,8 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
             </p>
             <p style={{ fontSize: "13px", color: "var(--ink-muted)", lineHeight: 1.6 }}>
               Câu của bạn không hiện trên màn hình. Đó là phần bạn phải tự bật ra.
-              Bản ghi chỉ nằm trên máy bạn và bị xoá khi buổi luyện kết thúc.
+              Bản ghi nằm trên máy bạn và bị xoá khi buổi luyện kết thúc; để chấm
+              phát âm, nó được gửi tới dịch vụ Microsoft Azure.
             </p>
             <button onClick={handleStart} style={primaryButton}>
               ▶ Bắt đầu buổi
@@ -695,6 +850,19 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
               sampleReplayUnlocked(script, session, view.index, turnStatus);
             const takeSounding = take !== null && recorder.playingKey === take.key;
             const lowSignal = take ? peakWarning(take.peak) : null;
+            // The **fourth projection**. It is handed the learner's line so it
+            // can bound what it names against it, and returns words only — the
+            // turn's own target words plus the specific words that scored
+            // badly, never a run of the line. `TurnView.text` stays `null`
+            // throughout: nothing below renders `turn.text`.
+            const turn = script.turns[view.index];
+            const card: ScoreCard | null = isSystem
+              ? null
+              : scoreCard(
+                  session.scores[view.index],
+                  turn?.targetWords ?? [],
+                  turn?.text ?? ""
+                );
 
             return (
               <div
@@ -820,6 +988,119 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
                   >
                     <span aria-hidden="true">{lowSignal.glyph}</span> {lowSignal.text}
                   </span>
+                )}
+
+                {/* The score card, stuck under the turn just spoken — never a
+                    separate screen. The verdict is a word (`Đạt` / `Chưa đạt`)
+                    as well as a glyph and a colour: no state by colour alone.
+
+                    `aria-live="off"` mutes the subtree from the transcript's
+                    `role="log" aria-live="polite"` above. Without it the whole
+                    card is re-announced on `pending → scored` and again every
+                    time the `<details>` opens; the one-line summary below is
+                    what speaks instead, and the rest stays readable at
+                    leisure. */}
+                {card && (
+                  <div
+                    className={`session-score session-score--${card.tone}`}
+                    aria-live="off"
+                  >
+                    <p className="session-score__sr" role="status" aria-live="polite">
+                      {cardSpeech(card)}
+                    </p>
+                    <div className="session-score__verdict">
+                      <span aria-hidden="true" className="session-score__glyph">
+                        {card.glyph}
+                      </span>
+                      <span className="session-score__label">{card.label}</span>
+                      {/* Two different quantities, and only ever one of them:
+                          how long *scoring* took, and how long the *take* was.
+                          The second is labelled, because an unlabelled `41.2s`
+                          in the slot every other card fills with its latency
+                          reads as a latency. */}
+                      {card.latencySeconds && (
+                        <span className="session-score__time">
+                          <span aria-hidden="true">{card.latencySeconds}</span>
+                          <span className="session-score__sr">
+                            Chấm xong sau {card.latencySeconds}.
+                          </span>
+                        </span>
+                      )}
+                      {card.clipSeconds && (
+                        <span className="session-score__time">
+                          Bản ghi {card.clipSeconds}
+                        </span>
+                      )}
+                    </div>
+
+                    {card.detail && (
+                      <p className="session-score__detail">{card.detail}</p>
+                    )}
+
+                    {card.chips.length > 0 && (
+                      <ul className="session-score__chips">
+                        {card.chips.map((chip) => (
+                          <li
+                            key={chip.word}
+                            className={`session-score__chip session-score__chip--${chip.level}`}
+                          >
+                            {/* The glyph, the IPA and the number are the
+                                *visual* form of the chip's state. A screen
+                                reader gets the same three facts as words in
+                                `chipSpeech` — `cold /d/ 10` on its own says
+                                nothing about pass or fail, which is the
+                                colour-alone failure AGENTS.md forbids. */}
+                            <span aria-hidden="true">{chip.glyph}</span>{" "}
+                            <span lang="en">{chip.word}</span>
+                            {chip.phoneme && (
+                              <span className="session-score__ipa" aria-hidden="true">
+                                /{chip.phoneme}/
+                              </span>
+                            )}
+                            {chip.score !== null && (
+                              <span className="session-score__num" aria-hidden="true">
+                                {chip.score}
+                              </span>
+                            )}
+                            <span className="session-score__sr">
+                              {chipSpeech(chip)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {card.tier2.length > 0 && (
+                      <ul className="session-score__findings">
+                        {card.tier2.map((finding, i) => (
+                          <li
+                            key={`${finding.word}-${finding.phoneme}-${i}`}
+                            className="session-score__finding"
+                          >
+                            <span aria-hidden="true">{finding.glyph}</span>{" "}
+                            {finding.text}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {card.tier3.length > 0 && (
+                      <details className="session-score__more">
+                        <summary>Chi tiết ({card.tier3.length})</summary>
+                        <ul className="session-score__findings">
+                          {card.tier3.map((finding, i) => (
+                            <li
+                              key={`${finding.word}-${finding.phoneme}-${i}`}
+                              className="session-score__finding"
+                            >
+                              <span aria-hidden="true">{finding.glyph}</span>{" "}
+                              {finding.text}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
                 )}
 
                 {/* "Tiếp" belongs to the bubble, not to the control row — the

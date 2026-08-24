@@ -19,11 +19,20 @@
 // `null` unconditionally for learner turns and the existing leak tests keep
 // meaning exactly what they say.
 //
-// Nothing here is persisted. Story 2.3 brings the first metrics worth a storage
-// layer and can pick the shape then; an in-memory session that survives
-// "Kết thúc buổi" but not a reload is exactly what Story 2.1 promises. Takes
-// are the same: they live in the `recordings` blob namespace for the length of
-// one session and are dropped when it ends or restarts.
+// Story 2.3 narrows it once more, the same way. The score card has to name
+// target words to be worth anything, so it is a **fourth, separate
+// projection** (`scoreCard` in `lib/pronunciation.ts`) rather than a flag on
+// `TurnView` — which keeps `text: null` and `targetWords: []` untouched, so the
+// three leak invariants below (`TurnView`, `audioTurnToPlay`,
+// `sampleReplayUnlocked`) keep meaning exactly what they say. What the card may
+// name is bounded against the line by `MIN_LEAKED_CONTENT_WORDS`.
+//
+// Nothing here is persisted — not the takes, and **not the scores**. In-memory
+// for one session, exactly as Stories 2.1 and 2.2 promise; a reload discards
+// it. Takes go further: they live in the `recordings` blob namespace for the
+// length of one session and are dropped when it ends or restarts. Scores are
+// not, because there is no blob to collect and the finished screen still shows
+// the turns they belong to.
 
 import type {
   DialogueScript,
@@ -32,6 +41,11 @@ import type {
 } from "./dialogue/types";
 import type { HistoryEntry } from "./history";
 import type { SampleAudioStatus } from "./sample-audio";
+import type {
+  ScoringFailure,
+  TurnAssessment,
+  TurnScore,
+} from "./pronunciation";
 
 /**
  * Which entry `/session?id=…` is about, decided over a list rather than over
@@ -90,6 +104,16 @@ export interface CompletedTurn {
   /** The take that ended this turn, or `null` — a system turn, or a learner
    *  turn the mic could not serve. */
   take: TurnTake | null;
+  /**
+   * How that take was scored, or `null` — a system turn, a turn with no take,
+   * or a take that was never sent.
+   *
+   * Kept in step with `SessionState.scores` by `withScore` rather than being a
+   * snapshot: an assessment routinely lands *after* "Tiếp", and a completed
+   * turn stuck on `{ state: "pending" }` forever would be a lie the end-of-
+   * session summary (Story 2.7) reads as fact.
+   */
+  score: TurnScore | null;
 }
 
 export interface SessionState {
@@ -111,6 +135,18 @@ export interface SessionState {
    * turn: an earlier turn scrolled back to must still be replayable.
    */
   takes: Record<number, TurnTake>;
+  /**
+   * Scores by turn index, for the whole session.
+   *
+   * Kept past the turn on purpose: assessment takes a second or two and "Tiếp"
+   * is usable immediately, so the answer frequently arrives when the cursor
+   * has already moved. It is also kept past `finished` — unlike `takes`, there
+   * is no blob to delete and Story 2.7's summary reads exactly this.
+   *
+   * Still **nothing persisted**: in-memory for one session, like 2.1 and 2.2.
+   * A reload discards it.
+   */
+  scores: Record<number, TurnScore>;
   /**
    * The microphone is unusable for the rest of this session — permission
    * denied, no device, or the capture graph failed to build.
@@ -146,6 +182,7 @@ export function createSession(): SessionState {
     phase: "idle",
     recordingStartedAt: null,
     takes: {},
+    scores: {},
     micBlocked: false,
     takeBlocked: false,
   };
@@ -218,7 +255,13 @@ export function startRecording(state: SessionState, at: number): SessionState {
   if (state.status !== "running") return state;
   const takes = { ...state.takes };
   delete takes[state.cursor];
-  return { ...state, phase: "recording", recordingStartedAt: at, takes };
+  // The score goes with the take it was a score *of*. Leaving it behind would
+  // hang last attempt's verdict under the attempt being spoken — the worst
+  // possible moment to show a stale ✗ — and there is deliberately no attempt
+  // counter to tell the two apart (Story 2.5 owns that).
+  const scores = { ...state.scores };
+  delete scores[state.cursor];
+  return { ...state, phase: "recording", recordingStartedAt: at, takes, scores };
 }
 
 /**
@@ -282,6 +325,72 @@ export function blockTake(state: SessionState): SessionState {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Scoring transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Write one turn's score, in the state **and** on the completed turn that
+ * carries it.
+ *
+ * One writer, so the two can never drift. They would otherwise: the assessment
+ * routinely lands after "Tiếp" has already folded the turn into `completed`,
+ * and a snapshot taken at completion time would freeze at `pending` forever.
+ *
+ * Deliberately **not** gated on `status === "running"`. A response that arrives
+ * after "Kết thúc buổi" still belongs to the turn it was asked about, and the
+ * finished screen still shows those turns. Nothing here can advance, reveal or
+ * unblock anything, so there is nothing to guard against.
+ */
+function withScore(
+  state: SessionState,
+  turnIndex: number,
+  score: TurnScore
+): SessionState {
+  return {
+    ...state,
+    scores: { ...state.scores, [turnIndex]: score },
+    completed: state.completed.map((turn) =>
+      turn.index === turnIndex ? { ...turn, score } : turn
+    ),
+  };
+}
+
+/** The request is about to leave. The card mounts now, in a worded pending
+ *  state — "Tiếp" is already usable and must never wait on this. */
+export function beginScoring(state: SessionState, turnIndex: number): SessionState {
+  return withScore(state, turnIndex, { state: "pending" });
+}
+
+/** A verdict came back. */
+export function completeScoring(
+  state: SessionState,
+  turnIndex: number,
+  assessment: TurnAssessment,
+  latencyMs: number
+): SessionState {
+  return withScore(state, turnIndex, { state: "scored", assessment, latencyMs });
+}
+
+/** Scoring failed. No number is invented and nothing is blocked. */
+export function failScoring(
+  state: SessionState,
+  turnIndex: number,
+  failure: ScoringFailure
+): SessionState {
+  return withScore(state, turnIndex, { state: "failed", failure });
+}
+
+/** The take was longer than `MAX_CLIP_MS`, so nothing was sent. Not a failure
+ *  — a decision, and the card says which. */
+export function skipScoring(
+  state: SessionState,
+  turnIndex: number,
+  durationMs: number
+): SessionState {
+  return withScore(state, turnIndex, { state: "too-long", durationMs });
+}
+
 /**
  * The turn on screen is done — record it and move the cursor on. Past the last
  * turn the session finishes on its own.
@@ -308,6 +417,9 @@ export function completeCurrentTurn(
       speaker: turn.speaker,
       elapsedMs: Math.max(0, at - (state.turnStartedAt ?? at)),
       take: state.takes[turn.index] ?? null,
+      // Usually `{ state: "pending" }` at this moment; `withScore` updates it
+      // in place when the answer lands, however long after this that is.
+      score: state.scores[turn.index] ?? null,
     },
   ];
 
@@ -360,9 +472,13 @@ export function endSession(state: SessionState): SessionState {
  * `text` is `null` on a learner turn and stays `null` in every state, at every
  * point: their line is the thing they are supposed to produce. `targetWords`
  * is emptied for the same reason — a target word is a literal substring of the
- * line, so handing it over is a partial reveal wearing a different name. The
- * single sanctioned reveal is Story 2.5's third-failure path, which will need
- * its own projection rather than a flag on this one.
+ * line, so handing it over is a partial reveal wearing a different name.
+ *
+ * The score card names target words — and it does so from its **own**
+ * projection (`scoreCard` in `lib/pronunciation.ts`), never from here. Story
+ * 2.5's third-failure reveal will need a fifth one for the same reason: a flag
+ * on this interface would quietly turn every existing leak test into a test of
+ * the flag's default.
  */
 export interface TurnView {
   index: number;

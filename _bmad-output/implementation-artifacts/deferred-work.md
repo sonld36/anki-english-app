@@ -113,3 +113,15 @@ Pre-existing issues surfaced incidentally by reviews. Not caused by the story th
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-ghi-am-luot-cua-minh-va-nghe-lai-canh-giong-mau.md`
   summary: `replayTurn` in SessionView is cleared only by `stopPlayback`, never when playback ends on its own, so the reaper's exemption for that turn index stays armed indefinitely.
   evidence: Review finding. Harmless today because `audioTurnToPlay` can never yield a learner index, but Story 2.5's sanctioned reveal will play a learner line and would inherit a stale exemption.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-cham-diem-ngay-trong-luong-chat.md`
+  summary: Offline scoring queue — hold a scoring request while the network is down and send it when connectivity returns.
+  evidence: EXPERIENCE.md requires queue-then-send and it is an open Epic 2 action item, but the epics.md AC for Story 2.3 only requires "say clearly that scoring failed, the session still goes on". Deferred at the human's direction during planning; a lost connection is treated as one more scoring failure.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-cham-diem-ngay-trong-luong-chat.md`
+  summary: No way to retry a failed assessment — a network/timeout/service failure ends the turn unscored, with re-recording as the only recourse.
+  evidence: Review finding. The take is still in the `recordings` namespace, so a "chấm lại" action would cost nothing beyond the retried call and would make the "buổi luyện vẫn đi tiếp" copy less of a dead end. Out of scope here: Story 2.3's AC only requires the failure be reported clearly.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-cham-diem-ngay-trong-luong-chat.md`
+  summary: There is no way to practise with scoring switched off — the privacy disclosure is notification-only, shown after the take is already captured.
+  evidence: Review finding. NFR-10 requires telling the learner their voice leaves the device, which this story does, but offers no consent choice. A scoring-off mode is a product decision and touches the Settings surface that is itself an open Epic 2 action item.

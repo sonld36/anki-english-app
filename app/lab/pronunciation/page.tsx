@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { encodeWav, isPeakTooLow, peakLevel } from "@/lib/wav";
+import {
+  azureNBest,
+  azureWords,
+  type AzureNBest,
+} from "@/lib/pronunciation";
 
 /**
  * Pronunciation assessment lab — a throwaway harness for validating three
@@ -48,24 +53,12 @@ const TEST_SENTENCES = [
   },
 ];
 
-// The REST API for short audio returns assessment scores FLAT on NBest[0] and on
-// each word/phoneme — not nested under a PronunciationAssessment object the way the
-// Speech SDK does. Verified against a live response 2026-08-20.
-interface AzureWord {
-  Word: string;
-  AccuracyScore?: number;
-  ErrorType?: string;
-  Phonemes?: { Phoneme: string; AccuracyScore?: number }[];
-}
-
-interface AzureNBest {
-  PronScore?: number;
-  AccuracyScore?: number;
-  FluencyScore?: number;
-  CompletenessScore?: number;
-  ProsodyScore?: number;
-  Words?: AzureWord[];
-}
+// `AzureWord`/`AzureNBest` and the `raw -> words` extraction moved to
+// `lib/pronunciation.ts` when Story 2.3 needed them in the product, and are
+// imported back here. The load-bearing note travelled with them: the REST API
+// for short audio returns assessment scores FLAT on NBest[0] and on each
+// word/phoneme, not nested under a PronunciationAssessment object the way the
+// Speech SDK does.
 
 interface RunResult {
   id: number;
@@ -460,7 +453,7 @@ export default function PronunciationLabPage() {
             </thead>
             <tbody>
               {azureRuns.map((r) => {
-                const nb = (r.raw as { NBest?: AzureNBest[] })?.NBest?.[0];
+                const nb: AzureNBest | null = azureNBest(r.raw);
                 return (
                   <tr key={r.id} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
                     <td style={{ padding: "6px 4px" }}>#{r.id}</td>
@@ -535,9 +528,8 @@ function ResultCard({ run }: { run: RunResult }) {
     );
   }
 
-  const nbest = (run.raw as { NBest?: AzureNBest[] }).NBest?.[0];
-  const scores = nbest;
-  const words = nbest?.Words ?? [];
+  const scores = azureNBest(run.raw);
+  const words = azureWords(run.raw);
 
   return (
     <section className="card" style={{ marginTop: "16px", padding: "20px" }}>
