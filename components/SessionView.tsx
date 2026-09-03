@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { HistoryEntry } from "@/lib/history";
-import { SPEAKER_LABELS } from "@/lib/dialogue/types";
+import { SPEAKER_LABELS, turnHasHints } from "@/lib/dialogue/types";
 import { renderHighlightedHtml } from "@/lib/dialogue/words";
 import { useSampleAudio } from "@/hooks/useSampleAudio";
 import { useTurnRecorder } from "@/hooks/useTurnRecorder";
@@ -31,9 +31,12 @@ import {
   endSession,
   failScoring,
   finishRecording,
+  hintAvailable,
+  hintDepth,
   isPracticable,
   micAction,
   micEnabled,
+  openHint,
   sampleReplayUnlocked,
   skipScoring,
   takeReplayUnlocked,
@@ -241,6 +244,32 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
    * both roles), and playing it would reveal the whole sentence aloud.
    */
   const audioTurn = audioTurnToPlay(script, session, audioStatus);
+
+  /**
+   * The hint slot — decided in the tested module, same implicit-cursor style
+   * as `micAction`: it only ever acts on `session.cursor`, never a turn index
+   * the screen picks itself.
+   */
+  const canOpenHint = hintAvailable(script, session);
+  const currentHintDepth = cursor === null ? "none" : hintDepth(session, cursor);
+  const currentTurnHasLadder = currentTurn ? turnHasHints(currentTurn) : false;
+  /**
+   * The only thing that says why the slot is inert — a system turn, no
+   * ladder for this turn (a v2 script, or a learner turn Gemini generated
+   * without hints), or a ladder already opened all the way. Mirrors
+   * `micLabel`: a disabled control must say why, not just refuse.
+   */
+  const hintLabel = !currentTurn
+    ? "Thang gợi ý: chưa có lượt nào để gợi ý"
+    : currentTurn.speaker === "system"
+      ? "Thang gợi ý: chỉ dùng được ở lượt của bạn"
+      : !currentTurnHasLadder
+        ? "Lượt này không có gợi ý"
+        : currentHintDepth === "keywords"
+          ? "Đã mở hết gợi ý cho lượt này"
+          : currentHintDepth === "situation"
+            ? "Xem từ khoá gợi ý"
+            : "Xem gợi ý tình huống";
 
   /**
    * The latest committed values, so callbacks can read them without becoming
@@ -622,6 +651,15 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
     );
   };
 
+  /**
+   * Open the next rung of the current turn's hint ladder. No network call —
+   * the content is already on `script.turns[i].hints` — and no-op past
+   * `hintAvailable`, so a stray extra tap on an already-open ladder is safe.
+   */
+  const handleHint = () => {
+    setSession((prev) => openHint(script, prev));
+  };
+
   /** Replay the learner's own take. Local, unlimited, zero network. */
   const handlePlayTake = (key: string) => {
     stopPlayback();
@@ -863,6 +901,24 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
                   turn?.targetWords ?? [],
                   turn?.text ?? ""
                 );
+            // Depth is UI/session state, not content — it lives on
+            // `session.hints`, not on `TurnView`. `turn.hints` is only read
+            // once a rung is actually open, and it exists whenever that is
+            // true: `openHint` only ever advances past `"none"` when
+            // `hintAvailable` already found a usable ladder.
+            const openDepth = isSystem ? "none" : hintDepth(session, view.index);
+            const hints = openDepth !== "none" ? turn?.hints : undefined;
+            // `turnHasHints` only requires one non-blank keyword, not that
+            // every entry is — and the hint validator's own keyword check is
+            // non-fatal, so a blank or repeated entry can ship. Filtered and
+            // deduped here rather than trusted from the model, the same way
+            // `namedWords`/`createNamer` never trust raw model text as-is.
+            const keywordChips =
+              openDepth === "keywords" && hints
+                ? Array.from(
+                    new Set(hints.keywords.map((k) => k.trim()).filter(Boolean))
+                  )
+                : [];
 
             return (
               <div
@@ -928,6 +984,50 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
                     </span>
                   )}
                 </div>
+
+                {/* The hint ladder, per this turn's own recorded depth — not
+                    just the current one, so scrolling back to a turn whose
+                    hints were opened still shows both rungs. Fixed order,
+                    situation then keywords, and never the line itself: these
+                    render exactly what `turn.hints` already carries,
+                    unmodified. Read-only chips (`.session-hint-chip`), unlike
+                    the interactive `.session-chip` controls below.
+
+                    The glyph+text caption is the same convention as every
+                    other label in this screen (the speaker tag above the
+                    bubble, the mic's accessible name): without it, a bare
+                    chip reading e.g. "Khi bạn chào lại" says nothing about
+                    what it is, for a sighted or screen-reader user alike. */}
+                {hints && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "var(--space-1)",
+                      padding: "0 var(--space-1)",
+                    }}
+                  >
+                    <span style={{ fontSize: "12px", color: "var(--ink-muted)" }}>
+                      <span aria-hidden="true">💡</span> Gợi ý
+                    </span>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "var(--space-2)",
+                      }}
+                    >
+                      <span className="session-hint-chip" lang="vi">
+                        {hints.situation}
+                      </span>
+                      {keywordChips.map((keyword) => (
+                        <span key={keyword} className="session-hint-chip" lang="en">
+                          {keyword}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* The take, and the model beside it. Both are local reads —
                     replay costs nothing, calls nothing and is unlimited, which
@@ -1194,20 +1294,29 @@ export default function SessionView({ entry }: { entry: HistoryEntry }) {
           flexShrink: 0,
         }}
       >
-        {/* Hint slot. Empty of content on purpose — the ladder is Story 2.4;
-            the slot exists now so the row never changes shape later. */}
+        {/* Hint slot. Fixed order, no skipping: one tap reveals `situation`,
+            the next reveals `keywords`, and a third tap on an already-open
+            ladder does nothing — `canOpenHint` already says `false` by then,
+            same as `hintAvailable`. No network call: the content is already
+            on `script.turns[i].hints`.
+
+            `aria-disabled` rather than `disabled`, same reasoning as the mic
+            button below: this is the control the learner has just pressed,
+            and a real `disabled` on the focused element drops focus to
+            `<body>`. */}
         <div style={{ width: CONTROL_SLOT, display: "flex", justifyContent: "flex-start" }}>
           <button
             type="button"
-            disabled
-            title="Thang gợi ý sẽ mở ở bước sau"
-            aria-label="Thang gợi ý: chưa dùng được"
+            onClick={handleHint}
+            aria-disabled={!canOpenHint}
+            title={hintLabel}
+            aria-label={hintLabel}
             style={{
               ...ghostButton,
-              borderStyle: "dashed",
-              color: "var(--ink-muted)",
-              cursor: "not-allowed",
-              opacity: 0.6,
+              borderStyle: canOpenHint ? "solid" : "dashed",
+              color: canOpenHint ? "var(--ink-secondary)" : "var(--ink-muted)",
+              cursor: canOpenHint ? "pointer" : "not-allowed",
+              opacity: canOpenHint ? 1 : 0.6,
             }}
           >
             💡 Gợi ý

@@ -39,6 +39,7 @@ import type {
   DialogueTurn,
   Speaker,
 } from "./dialogue/types";
+import { turnHasHints } from "./dialogue/types";
 import type { HistoryEntry } from "./history";
 import type { SampleAudioStatus } from "./sample-audio";
 import type {
@@ -171,6 +172,22 @@ export interface SessionState {
    * đi tiếp bình thường".
    */
   takeBlocked: boolean;
+  /**
+   * How far each turn's hint ladder has been opened, by turn index, for the
+   * whole session. Keyed like `takes`/`scores` but with the opposite
+   * lifetime: `startRecording` clears that turn's take and score because a
+   * fresh attempt outdates both, but never touches this — a hint once opened
+   * stays open, re-record or not, and past `endSession` too. It answers "did
+   * this turn ever need a hint", which is what FR-17's future latency
+   * exclusion and FR-4's "vẫn tính" rule both need to stay true for the
+   * turn's whole life, not just its latest attempt.
+   *
+   * Not a fifth leak-prone projection the way `scoreCard` was a fourth one:
+   * this carries no hint *content*, only how far the ladder was opened, so
+   * `TurnView` needs no change and the existing leak sweeps keep meaning
+   * exactly what they say.
+   */
+  hints: Record<number, HintDepth>;
 }
 
 export function createSession(): SessionState {
@@ -185,6 +202,7 @@ export function createSession(): SessionState {
     scores: {},
     micBlocked: false,
     takeBlocked: false,
+    hints: {},
   };
 }
 
@@ -604,6 +622,65 @@ export function canContinue(
   if (script?.turns[index]?.speaker !== "learner") return false;
   if (state.phase === "recording") return false;
   return state.phase === "recorded" || state.micBlocked || state.takeBlocked;
+}
+
+// ---------------------------------------------------------------------------
+// Hint ladder
+// ---------------------------------------------------------------------------
+
+/**
+ * Which rung of a turn's hint ladder has been opened. Two rungs, fixed
+ * order — `situation` before `keywords` — and deliberately no third value:
+ * the ladder itself has no third rung, and no rung may reveal the whole
+ * target line.
+ */
+export type HintDepth = "none" | "situation" | "keywords";
+
+/** How far this turn's ladder has been opened. Defaults to `"none"` — most
+ *  turns are never asked about at all. */
+export function hintDepth(state: SessionState, turnIndex: number): HintDepth {
+  return state.hints[turnIndex] ?? "none";
+}
+
+/**
+ * May the hint button do anything right now?
+ *
+ * Implicit-cursor, like `startRecording`/`micAction`: it only ever looks at
+ * the turn on screen (`currentTurnIndex`), never a turn index parameter,
+ * because the hint slot in `SessionView` always means "this turn". A system
+ * turn, a turn with no usable ladder (`turnHasHints` — which also rejects a
+ * ladder that is present but empty, the accept-with-faulty-hints case), and
+ * a turn already open to `"keywords"` all answer `false`; that last case is
+ * what makes a third tap on an open ladder a no-op rather than a crash.
+ */
+export function hintAvailable(
+  script: DialogueScript | null | undefined,
+  state: SessionState
+): boolean {
+  const index = currentTurnIndex(script, state);
+  if (index === null) return false;
+  const turn = script?.turns[index];
+  if (!turn || !turnHasHints(turn)) return false;
+  return hintDepth(state, index) !== "keywords";
+}
+
+/**
+ * Advance the current turn's hint ladder by one rung — `none → situation →
+ * keywords` — or no-op when `hintAvailable` says no.
+ *
+ * Deliberately does not touch `canContinue`, the score gate or the pass
+ * count: opening a hint is UI/session bookkeeping, not a scoring input, and
+ * has no coupling to `lib/pronunciation.ts` or the scoring transitions.
+ */
+export function openHint(
+  script: DialogueScript | null | undefined,
+  state: SessionState
+): SessionState {
+  if (!hintAvailable(script, state)) return state;
+  const index = state.cursor;
+  const next: HintDepth =
+    hintDepth(state, index) === "none" ? "situation" : "keywords";
+  return { ...state, hints: { ...state.hints, [index]: next } };
 }
 
 /**

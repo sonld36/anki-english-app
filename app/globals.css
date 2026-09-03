@@ -490,6 +490,26 @@ body:has(.session-screen) {
   color: var(--ink-primary);
 }
 
+/* Story 2.4's hint ladder — same pill as `.session-chip`, deliberately not
+   interactive: these render a rung the learner already opened, they do not
+   open anything themselves, so no `cursor: pointer` and no `:hover`.
+   DESIGN.md's chip spec ("bo tròn hoàn toàn, viền mảnh, chữ meta") applies to
+   both rungs alike; only `openDepth` in `SessionView` decides which render. */
+.session-screen .session-hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+}
+
 /* The warning tier from DESIGN.md's accessibility table: `!` plus a dashed
    border, so the state survives greyscale and a screen reader alike. Never
    colour alone. Scoped, like everything else this screen adds. */

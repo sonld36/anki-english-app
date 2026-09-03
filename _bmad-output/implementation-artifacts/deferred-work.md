@@ -2,6 +2,10 @@
 
 Pre-existing issues surfaced incidentally by reviews. Not caused by the story that found them.
 
+- source_spec: `spec-2-4-thang-goi-y-hai-nac.md`
+  summary: No code reconciles the combined disclosure when two independently-bounded per-turn reveal projections render on the same turn at once (Story 2.4's hint ladder and Story 2.3's score card).
+  evidence: `scoreCard` bounds its own named words against the line via `MIN_LEAKED_CONTENT_WORDS`/`namedWords`, and the hint ladder's `keywords` are bounded separately at generation time (`MAX_EXTRA_HINT_KEYWORDS` + target words). Each projection is verified safe in isolation, but nothing computes what their *union* discloses when both are open on the same turn simultaneously — a combination that did not exist before 2.4 since there was only one reveal channel. The per-projection bounds don't compose into a proven per-turn bound. This is bigger than one story: it's the "projection" pattern itself (2.2 → 2.3 → 2.4, with 2.5 adding a fifth) that needs a cross-cutting review, not a point fix in 2.4 alone.
+
 - source_spec: `spec-1-1-nap-tu-vung-qua-lop-nguon-thay-the-duoc.md`
   summary: `npm run lint` reports 3 pre-existing `react-hooks/set-state-in-effect` errors in `app/page.tsx:15`, `app/practice/page.tsx:18`, `components/HistoryPanel.tsx:19`.
   evidence: Verified against baseline `730bd98` in a clean worktree — baseline is 3 errors / 7 warnings, post-story is 3 errors / 6 warnings. No regression, but every story with a "lint clean" AC will keep tripping on it. Fixing means restructuring effects in files outside any current story's scope.

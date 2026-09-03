@@ -21,7 +21,10 @@ import {
   cancelRecording,
   clockBasis,
   finishRecording,
+  hintAvailable,
+  hintDepth,
   micAction,
+  openHint,
   sampleReplayUnlocked,
   startRecording,
   takeReplayUnlocked,
@@ -116,6 +119,8 @@ describe("createSession", () => {
       scores: {},
       micBlocked: false,
       takeBlocked: false,
+      // Story 2.4's slot. Empty, same reasoning as `scores` above.
+      hints: {},
     });
   });
 });
@@ -746,6 +751,9 @@ describe("the recording transitions", () => {
     expect(Object.keys(again).sort()).toEqual([
       "completed",
       "cursor",
+      // Story 2.4's slot, alphabetically before `micBlocked` — proves hint
+      // depth survives `startRecording`'s reset, unlike `takes`/`scores`.
+      "hints",
       "micBlocked",
       "phase",
       "recordingStartedAt",
@@ -1115,6 +1123,9 @@ describe("the leak sweep still finds nothing, now with takes and scores in play"
       takes: s.takes,
       micBlocked: s.micBlocked,
       takeBlocked: s.takeBlocked,
+      // Not a secret — hint depth names no content, so it stays in the
+      // lifted object rather than joining `OMITTED` below.
+      hints: s.hints,
       completed: s.completed.map((t) => ({
         index: t.index,
         speaker: t.speaker,
@@ -1564,5 +1575,131 @@ describe("scoring cannot open the audio leak", () => {
       "targetWords",
       "text",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 2.4 — the two-rung hint ladder
+// ---------------------------------------------------------------------------
+
+/** Walk to turn 3 — a learner turn (`LEARNER_LINE_2`) with no `hints` at
+ *  all, the "no ladder" case the I/O matrix calls out. */
+function onNoLadderTurn(at = 1_000): SessionState {
+  let state = startSession(SCRIPT, at);
+  let t = at;
+  for (let i = 0; i < 3; i += 1) {
+    t += 1_000;
+    state = completeCurrentTurn(SCRIPT, state, t);
+  }
+  return state;
+}
+
+describe("hintDepth / hintAvailable / openHint", () => {
+  it("defaults every turn to 'none'", () => {
+    expect(hintDepth(createSession(), 1)).toBe("none");
+    expect(hintDepth(onLearnerTurn(), 1)).toBe("none");
+  });
+
+  it("is unavailable before the start gesture and after the end", () => {
+    expect(hintAvailable(SCRIPT, createSession())).toBe(false);
+    expect(hintAvailable(SCRIPT, runToEnd(SCRIPT))).toBe(false);
+  });
+
+  it("is unavailable on a system turn", () => {
+    expect(hintAvailable(SCRIPT, startSession(SCRIPT, 1_000))).toBe(false);
+    expect(openHint(SCRIPT, startSession(SCRIPT, 1_000))).toEqual(
+      startSession(SCRIPT, 1_000)
+    );
+  });
+
+  it("is unavailable on a learner turn with no usable ladder", () => {
+    const state = onNoLadderTurn();
+    expect(hintAvailable(SCRIPT, state)).toBe(false);
+    // No-op: the state comes back unchanged, not stuck half-open.
+    expect(openHint(SCRIPT, state)).toEqual(state);
+  });
+
+  it("first tap: 'none' -> 'situation'", () => {
+    const state = onLearnerTurn();
+    expect(hintAvailable(SCRIPT, state)).toBe(true);
+    const opened = openHint(SCRIPT, state);
+    expect(hintDepth(opened, 1)).toBe("situation");
+  });
+
+  it("second tap: 'situation' -> 'keywords'", () => {
+    const once = openHint(SCRIPT, onLearnerTurn());
+    expect(hintAvailable(SCRIPT, once)).toBe(true);
+    const twice = openHint(SCRIPT, once);
+    expect(hintDepth(twice, 1)).toBe("keywords");
+  });
+
+  it("third tap on an already-open ladder is a no-op", () => {
+    const twice = openHint(SCRIPT, openHint(SCRIPT, onLearnerTurn()));
+    expect(hintAvailable(SCRIPT, twice)).toBe(false);
+    const thrice = openHint(SCRIPT, twice);
+    expect(thrice).toEqual(twice);
+    expect(hintDepth(thrice, 1)).toBe("keywords");
+  });
+
+  it("only ever acts on the current turn — no index parameter to misuse", () => {
+    // `openHint` reads `state.cursor`, not an argument, so there is no way to
+    // open a hint for a turn other than the one on screen.
+    const opened = openHint(SCRIPT, onLearnerTurn());
+    expect(opened.hints).toEqual({ 1: "situation" });
+  });
+
+  it("survives re-recording the same turn — unlike takes and scores", () => {
+    const opened = openHint(SCRIPT, onLearnerTurn());
+    const recorded = finishRecording(startRecording(opened, 5_000), TAKE);
+    const scored = completeScoring(recorded, 1, assessTurn([], []), 1_000);
+    const reRecording = startRecording(scored, 9_000);
+    // Take and score are gone, per Story 2.2/2.3's rule...
+    expect(reRecording.takes[1]).toBeUndefined();
+    expect(reRecording.scores[1]).toBeUndefined();
+    // ...but the hint depth from before the re-record is untouched.
+    expect(hintDepth(reRecording, 1)).toBe("situation");
+  });
+
+  it("opening a hint never changes scores, completed turns or canContinue", () => {
+    const before = onLearnerTurn();
+    const after = openHint(SCRIPT, before);
+    expect(after.scores).toEqual(before.scores);
+    expect(after.completed).toEqual(before.completed);
+    expect(canContinue(SCRIPT, after)).toBe(canContinue(SCRIPT, before));
+    // Confirms the two states really do differ — otherwise the assertions
+    // above would be trivially true because nothing happened at all.
+    expect(after.hints).not.toEqual(before.hints);
+  });
+
+  it("both rungs stay visible once opened, after the turn is no longer current", () => {
+    // "Scroll back" from the I/O matrix: open both rungs on turn 1, then walk
+    // the session past it. The depth recorded for turn 1 must not reset.
+    let state = openHint(SCRIPT, onLearnerTurn());
+    state = openHint(SCRIPT, state);
+    expect(hintDepth(state, 1)).toBe("keywords");
+    state = completeCurrentTurn(SCRIPT, state, 6_000);
+    state = completeCurrentTurn(SCRIPT, state, 7_000);
+    expect(hintDepth(state, 1)).toBe("keywords");
+  });
+
+  it("survives the end of the session — same reasoning as scores", () => {
+    const opened = openHint(SCRIPT, onLearnerTurn());
+    const ended = endSession(opened);
+    expect(hintDepth(ended, 1)).toBe("situation");
+  });
+
+  it("resets to '{}' on restart, same as takes and scores", () => {
+    const opened = openHint(SCRIPT, onLearnerTurn());
+    const restarted = startSession(SCRIPT, 50_000, opened);
+    expect(restarted.hints).toEqual({});
+    expect(hintDepth(restarted, 1)).toBe("none");
+  });
+
+  it("is unavailable and a no-op with no script", () => {
+    expect(hintAvailable(null, onLearnerTurn())).toBe(false);
+    expect(hintAvailable(undefined, onLearnerTurn())).toBe(false);
+    const state = onLearnerTurn();
+    expect(openHint(null, state)).toEqual(state);
+    expect(openHint(undefined, state)).toEqual(state);
   });
 });
